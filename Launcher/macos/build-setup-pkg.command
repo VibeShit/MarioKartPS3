@@ -98,6 +98,8 @@ for source in aurora-main projects runtime translator; do
     [[ -d "$workspace/$source" ]] || fail "required workspace directory is missing: $source"
     copy_clean "$workspace/$source" "$resources/workspace/$source"
 done
+# Setup bundles contain materialized sources and must work without Git.
+find "$resources/workspace" -name .git -prune -exec rm -rf {} +
 mkdir -p "$resources/workspace/Launcher/macos"
 copy_clean "$workspace/Launcher/local-build-macos.command" "$resources/workspace/Launcher/local-build-macos.command"
 copy_clean "$workspace/Launcher/macos/extract-disc.command" "$resources/workspace/Launcher/macos/extract-disc.command"

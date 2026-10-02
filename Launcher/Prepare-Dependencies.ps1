@@ -21,6 +21,9 @@ $auroraExtern = Join-Path $repoRoot 'aurora-main\extern\CMakeLists.txt'
 $auroraDawn = Join-Path $repoRoot 'aurora-main\cmake\AuroraDawnProvider.cmake'
 $auroraLibUsb = Join-Path $repoRoot 'aurora-main\cmake\AuroraLibUSB.cmake'
 $auroraSdl = Join-Path $repoRoot 'aurora-main\cmake\AuroraSDL3Provider.cmake'
+if (-not (Test-Path -LiteralPath $auroraCMake -PathType Leaf)) {
+    throw 'Aurora sources are missing. Run git submodule update --init --recursive from the repository root first.'
+}
 
 # Name = directory under the destination; FetchContent maps it back through
 # FETCHCONTENT_SOURCE_DIR_<UPPERCASE NAME> (NativeBuildFlags.ps1), so the names are the declared

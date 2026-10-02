@@ -156,7 +156,14 @@ set(MKW_CPPWINRT_INCLUDE_DIR "" CACHE PATH "Optional self-contained C++/WinRT in
 # not compiled at all; imported targets with the same names are wired up from
 # the package instead, so this project's own code compiles and links exactly
 # as before.
-set(MKW_AURORA_DIR "${CMAKE_CURRENT_LIST_DIR}/../aurora-main")
+set(MKW_AURORA_DIR "${CMAKE_CURRENT_LIST_DIR}/../aurora-main" CACHE PATH
+    "Aurora source directory")
+if(NOT EXISTS "${MKW_AURORA_DIR}/CMakeLists.txt"
+        OR NOT EXISTS "${MKW_AURORA_DIR}/include/aurora/aurora.h")
+    message(FATAL_ERROR
+        "Aurora sources are missing at ${MKW_AURORA_DIR}. From the repository root, run "
+        "git submodule update --init --recursive, or set MKW_AURORA_DIR to an initialized Aurora checkout.")
+endif()
 
 # The translator's explicit float casts are PPC single-precision rounding points.
 # Fast-math may erase them and change guest-visible integer conversions.
@@ -171,9 +178,6 @@ if(MKW_NATIVE_PREBUILT_DIR)
     # not compiled here.
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/NativePrebuilt.cmake")
 else()
-    if(NOT EXISTS ${MKW_AURORA_DIR}/CMakeLists.txt)
-        message(FATAL_ERROR "Requested aurora-main but ${MKW_AURORA_DIR} is missing")
-    endif()
     set(DAWN_ENABLE_D3D11 OFF CACHE BOOL "" FORCE)
     if(MKW_PLATFORM_WINDOWS)
         set(DAWN_ENABLE_D3D12 ON CACHE BOOL "" FORCE)
@@ -423,7 +427,7 @@ else()
         add_library(mkw_macos_native_compile OBJECT ${MKW_MACOS_NATIVE_AUDIT_SOURCES})
         target_include_directories(mkw_macos_native_compile PRIVATE
             "${CMAKE_CURRENT_LIST_DIR}/include" "${CMAKE_CURRENT_LIST_DIR}/src"
-            "${CMAKE_CURRENT_LIST_DIR}/.." "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/include")
+            "${CMAKE_CURRENT_LIST_DIR}/.." "${MKW_AURORA_DIR}/include")
         target_compile_features(mkw_macos_native_compile PRIVATE cxx_std_20)
         target_compile_definitions(mkw_macos_native_compile PRIVATE SDL_MAIN_HANDLED TARGET_PC)
         target_link_libraries(mkw_macos_native_compile PRIVATE

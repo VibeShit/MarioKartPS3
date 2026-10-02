@@ -244,13 +244,14 @@ function Get-MkwAuroraSourceFingerprint([string]$AuroraDirectory) {
         (Join-Path $root 'extern') + '\',
         (Join-Path $root 'build') + '\'
     )
-    # Hidden files are skipped deliberately: Build-Installer.ps1 stages this tree
-    # with Copy-Item -Recurse (no -Force), so they never reach the payload and
-    # hashing them would make the two sides disagree by construction.
+    # Git metadata identifies a checkout location, not a source revision's bytes.
+    # Exclude it explicitly, including a submodule's non-hidden .git file.
     $files = Get-ChildItem -LiteralPath $root -Recurse -File |
         Where-Object {
             $full = $_.FullName
-            -not ($excludedPrefixes | Where-Object { $full.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) })
+            $relative = $full.Substring($root.Length + 1).Replace('\', '/')
+            ($relative -notmatch '(^|/)\.git(/|$)') -and
+                -not ($excludedPrefixes | Where-Object { $full.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) })
         } |
         Sort-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') }
     $sha = [Security.Cryptography.SHA256]::Create()
