@@ -29,3 +29,24 @@ int fchmod(int fd, mode_t mode) {
     (void)mode;
     return 0;
 }
+
+/* lv2 has no descriptor duplication or hard links. */
+int dup(int fd) {
+    (void)fd;
+    errno = ENOSYS;
+    return -1;
+}
+
+int dup2(int fd, int target) {
+    (void)fd;
+    (void)target;
+    errno = ENOSYS;
+    return -1;
+}
+
+int link(const char* target, const char* linkpath) {
+    (void)target;
+    (void)linkpath;
+    errno = ENOSYS;
+    return -1;
+}

@@ -1134,6 +1134,7 @@ void clear_display_copy_cache() noexcept {
   g_gxState.displayCopyHeight = 0;
 }
 
+#if !defined(AURORA_RSX) // The RSX backend presents the display copy itself (rsx_api.cpp).
 void set_display_copy_present_source() noexcept {
   if (!g_gxState.displayCopyTexture) {
     return;
@@ -1144,6 +1145,7 @@ void set_display_copy_present_source() noexcept {
   webgpu::set_present_source_override(g_gxState.displayCopyBindGroup, g_gxState.displayCopyTexture->texture,
                                       g_gxState.displayCopyTexture->size, g_gxState.displayCopyTexture->format);
 }
+#endif
 
 void evict_copy_texture(const void* dest) noexcept {
   // Dynamic palette textures are keyed on the copy texture's raw TextureRef pointer; evicting the copy without them leaves entries that can match a recycled allocation at the same address and serve a stale conversion.

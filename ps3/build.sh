@@ -44,6 +44,7 @@ if (( synthetic )); then
     generated_root=$workspace/build/ps3-synthetic
     build_dir=$workspace/build/ps3-synthetic/native
     entry=0x800042E0
+    EXTRA_CMAKE_ARGS="-DMKW_PS3_SYNTHETIC=ON ${EXTRA_CMAKE_ARGS:-}"
 else
     project=$workspace/projects/mkwii/recomp.yml
     generated_root=$workspace

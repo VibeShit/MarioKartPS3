@@ -94,7 +94,6 @@ target_link_directories(mkw_ps3_flags INTERFACE "${PSL1GHT}/ppu/lib" "${PS3DEV}/
 # ---------------------------------------------------------------------------
 add_library(mkw_ps3_compat STATIC
     "${MKW_PS3_DIR}/compat/src/ps3_threads.cpp"
-    "${MKW_PS3_DIR}/compat/src/posix_stubs.c"
     "${MKW_PS3_DIR}/compat/src/math_compat.c"
     "${MKW_PS3_DIR}/compat/src/netdb_compat.c"
     "${MKW_PS3_DIR}/sdl3/sdl3_ps3.cpp")
@@ -233,9 +232,17 @@ target_compile_options(mkw_translated PRIVATE -O2 ${MKW_TRANSLATED_FP_OPTIONS})
 # ---------------------------------------------------------------------------
 # Executable and PS3 packaging
 # ---------------------------------------------------------------------------
+option(MKW_PS3_SYNTHETIC "Build the synthetic pipeline test (stubs untranslated guest functions)" OFF)
+set(MKW_PS3_EXE_EXTRA_SOURCES
+    # libstdc++ is linked after every archive, so its POSIX dependencies must be plain objects.
+    "${MKW_PS3_DIR}/compat/src/posix_stubs.c")
+if(MKW_PS3_SYNTHETIC)
+    list(APPEND MKW_PS3_EXE_EXTRA_SOURCES "${MKW_PS3_DIR}/tests/synthetic/guest_stubs.cpp")
+endif()
 add_executable(wiicompiled_ps3
     "${MKW_RUNTIME_DIR}/src/product/base_product.cpp"
-    ${MKW_BASE_REGISTRATION_SOURCES})
+    ${MKW_BASE_REGISTRATION_SOURCES}
+    ${MKW_PS3_EXE_EXTRA_SOURCES})
 set_target_properties(wiicompiled_ps3 PROPERTIES OUTPUT_NAME "wiicompiled" SUFFIX ".elf")
 target_compile_options(wiicompiled_ps3 PRIVATE -O2 ${MKW_TRANSLATED_FP_OPTIONS})
 target_link_libraries(wiicompiled_ps3 PRIVATE
