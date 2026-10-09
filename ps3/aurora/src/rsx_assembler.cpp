@@ -28,6 +28,7 @@ AssembledProgram assemble_fragment_program(const std::string& source) {
   CFPParser parser;
   CCompilerFP compiler;
   parser.Parse(text.data());
+  out.parsedInstructions = static_cast<uint32_t>(parser.GetInstructionCount());
   compiler.Compile(&parser);
   out.instructionCount = static_cast<uint32_t>(compiler.GetInstructionCount());
   out.numRegs = static_cast<uint32_t>(compiler.GetNumRegs());

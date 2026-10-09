@@ -14,6 +14,8 @@ struct AssembledProgram {
   // (instruction index holding the constant, constant register) for every c[] declared with #var.
   std::vector<std::pair<uint32_t, int>> constRelocations;
   uint32_t instructionCount = 0;
+  // Instructions the parser recognized (unknown mnemonics are skipped silently).
+  uint32_t parsedInstructions = 0;
   uint32_t numRegs = 0;
   uint32_t fpControl = 0;
   uint32_t texcoords = 0;

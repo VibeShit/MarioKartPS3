@@ -25,7 +25,7 @@ Module Log("aurora::rsx");
 
 constexpr uint32_t kCommandBufferSize = 0x200000;
 // Command buffer followed by two halves of streaming memory (vertices, fragment programs).
-constexpr uint32_t kHostSize = 64u * 1024u * 1024u;
+constexpr uint32_t kHostSize = 32u * 1024u * 1024u;
 constexpr uint32_t kDisplayBufferCount = 2;
 constexpr uint8_t kLabelFrame = 200;
 constexpr uint8_t kLabelIdle = 201;
@@ -40,6 +40,7 @@ uint32_t g_streamHalfSize = 0;
 uint32_t g_streamPos = 0;
 
 uint32_t g_frame = 1;
+uint32_t g_streamGeneration = 1;
 uint32_t g_idleSequence = 0;
 
 uint32_t g_displayWidth = 0;
@@ -152,6 +153,7 @@ Stream stream_alloc(uint32_t size, uint32_t align) noexcept {
     // Out of streaming memory for this frame: drain the GPU and start the half over.
     wait_idle();
     pos = 0;
+    ++g_streamGeneration;
     if (size > g_streamHalfSize) {
       Log.fatal("RSX stream allocation of {} bytes exceeds the ring", size);
     }
@@ -301,6 +303,7 @@ Target texture_target(const gfx::TextureRef& texture) noexcept {
 }
 
 uint32_t frame_index() noexcept { return g_frame; }
+uint32_t stream_generation() noexcept { return g_streamGeneration; }
 uint32_t display_width() noexcept { return g_displayWidth; }
 uint32_t display_height() noexcept { return g_displayHeight; }
 
@@ -312,6 +315,7 @@ void begin_frame() noexcept {
     wait_label(kLabelFrame, g_frame - 2);
   }
   g_streamPos = 0;
+  ++g_streamGeneration;
   process_frees(false);
   bind_target(g_efb);
   apply_viewport_scissor();

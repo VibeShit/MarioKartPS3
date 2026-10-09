@@ -235,7 +235,8 @@ target_compile_options(mkw_translated PRIVATE -O2 ${MKW_TRANSLATED_FP_OPTIONS})
 option(MKW_PS3_SYNTHETIC "Build the synthetic pipeline test (stubs untranslated guest functions)" OFF)
 set(MKW_PS3_EXE_EXTRA_SOURCES
     # libstdc++ is linked after every archive, so its POSIX dependencies must be plain objects.
-    "${MKW_PS3_DIR}/compat/src/posix_stubs.c")
+    "${MKW_PS3_DIR}/compat/src/posix_stubs.c"
+    "${MKW_PS3_DIR}/platform/ps3_process.cpp")
 if(MKW_PS3_SYNTHETIC)
     list(APPEND MKW_PS3_EXE_EXTRA_SOURCES "${MKW_PS3_DIR}/tests/synthetic/guest_stubs.cpp")
 endif()

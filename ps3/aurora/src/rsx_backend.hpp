@@ -31,6 +31,8 @@ struct Stream {
   uint32_t offset = 0;
 };
 Stream stream_alloc(uint32_t size, uint32_t align = 16) noexcept;
+// Changes whenever earlier stream allocations may have been recycled.
+uint32_t stream_generation() noexcept;
 
 // A color surface (A8R8G8B8, linear) with an optional Z24S8 depth surface.
 struct Target {

@@ -35,14 +35,15 @@ ClipRect g_savedScissor;
 
 uint32_t align_up(uint32_t value, uint32_t align) { return (value + align - 1) & ~(align - 1); }
 
-TextureHandle make_texture(uint32_t width, uint32_t height, uint32_t mips, u32 gxFormat) {
+TextureHandle make_texture(uint32_t width, uint32_t height, uint32_t mips, u32 gxFormat, bool renderTarget = false) {
   width = std::max(width, 1u);
   height = std::max(height, 1u);
   auto ref = std::make_shared<TextureRef>(wgpu::Texture{}, wgpu::TextureView{}, wgpu::TextureView{},
                                           wgpu::Extent3D{width, height, 1}, wgpu::TextureFormat::RGBA8Unorm,
                                           std::max(mips, 1u), gxFormat);
   ref->rsxPitch = align_up(width * 4, 64);
-  ref->rsxMemory = rsx::local_alloc(ref->rsxPitch * height, 128);
+  // Render targets need surface alignment; sampled-only textures just texture alignment.
+  ref->rsxMemory = rsx::local_alloc(ref->rsxPitch * height, renderTarget ? 4096 : 128);
   ref->rsxOffset = rsx::local_offset(ref->rsxMemory);
   return ref;
 }
@@ -112,11 +113,11 @@ TextureHandle new_dynamic_texture_2d(uint32_t width, uint32_t height, uint32_t m
 }
 
 TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat, const char*) noexcept {
-  return make_texture(width, height, 1, gxFormat);
+  return make_texture(width, height, 1, gxFormat, true);
 }
 
 TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, const char*) noexcept {
-  return make_texture(width, height, 1, gxFormat);
+  return make_texture(width, height, 1, gxFormat, true);
 }
 
 void write_texture(TextureRef& ref, ArrayRef<uint8_t> data) noexcept {

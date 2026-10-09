@@ -572,7 +572,7 @@ struct FragmentProgram {
   std::vector<std::pair<uint32_t, uint8_t>> relocations;
   uint32_t textureMask = 0;
   // Last uploaded copy, reused while the constants it embeds are unchanged.
-  uint32_t lastFrame = UINT32_MAX;
+  uint32_t lastGeneration = 0;
   uint32_t lastOffset = 0;
   std::array<Vec4<float>, kConstCount> lastConstants{};
 };
@@ -644,7 +644,7 @@ uint32_t fragment_texture_mask(const FragmentProgram* program) noexcept { return
 
 void bind_fragment_program(const FragmentProgram* constProgram, const Vec4<float>* constants) noexcept {
   auto* program = const_cast<FragmentProgram*>(constProgram);
-  bool same = program->lastFrame == frame_index();
+  bool same = program->lastGeneration == stream_generation();
   if (same && constants != nullptr) {
     for (const auto& [word, slot] : program->relocations) {
       if (std::memcmp(&program->lastConstants[slot], &constants[slot], sizeof(Vec4<float>)) != 0) {
@@ -668,7 +668,7 @@ void bind_fragment_program(const FragmentProgram* constProgram, const Vec4<float
         program->lastConstants[slot] = constants[slot];
       }
     }
-    program->lastFrame = frame_index();
+    program->lastGeneration = stream_generation();
     program->lastOffset = stream.offset;
     rsxLoadFragmentProgramLocation(g_ctx, &program->header, stream.offset, GCM_LOCATION_CELL);
   } else if (g_boundProgram != program) {
