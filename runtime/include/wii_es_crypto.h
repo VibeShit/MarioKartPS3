@@ -24,6 +24,7 @@
 #include <cryptopp/ec2n.h>
 #include <cryptopp/oids.h>
 #include <cryptopp/osrng.h>
+#include <cryptopp/randpool.h>
 #include <cryptopp/sha.h>
 
 #include <algorithm>
@@ -150,7 +151,23 @@ inline EcSignature SignMessage(const uint8_t* key, const uint8_t* data, size_t s
         throw std::runtime_error("Crypto++ returned an unexpected sect233r1 signature size");
     }
 
+#if defined(__PPU__)
+    // lv2 has no OS entropy device Crypto++ knows about; seed a pool from the
+    // timebase. This only feeds ECDSA nonces for local save signing.
+    thread_local CryptoPP::RandomPool random;
+    thread_local bool seeded = false;
+    if (!seeded) {
+        uint64_t seed[4];
+        for (auto& word : seed) {
+            __asm__ volatile("mftb %0" : "=r"(word));
+            word ^= reinterpret_cast<uintptr_t>(&word) * 0x9E3779B97F4A7C15ull;
+        }
+        random.IncorporateEntropy(reinterpret_cast<const CryptoPP::byte*>(seed), sizeof(seed));
+        seeded = true;
+    }
+#else
     thread_local CryptoPP::AutoSeededRandomPool random;
+#endif
     EcSignature signature{};
     const size_t written = signer.SignMessage(random, data, size, signature.data());
     if (written != signature.size()) {

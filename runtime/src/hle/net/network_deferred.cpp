@@ -268,10 +268,17 @@ static DeferredDnsCompletion ResolveDeferredDns(DeferredDnsWork work) {
     return completion;
 }
 
+#if defined(__PPU__)
+// The PS3 libstdc++ has no thread support; ps3compat::thread has the same interface.
+using MkwDnsThread = ps3compat::thread;
+#else
+using MkwDnsThread = std::thread;
+#endif
+
 static bool LaunchDeferredDns(DeferredDnsWork work) {
-    std::unique_ptr<std::thread> worker;
+    std::unique_ptr<MkwDnsThread> worker;
     try {
-        worker = std::make_unique<std::thread>([work = std::move(work)]() mutable {
+        worker = std::make_unique<MkwDnsThread>([work = std::move(work)]() mutable {
             NetworkDeferredContract::RunWorker(
                 std::move(work),
                 [](const DeferredDnsWork& copiedWork) {

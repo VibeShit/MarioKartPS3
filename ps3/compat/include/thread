@@ -1,0 +1,62 @@
+// PS3 wrapper: the single-threaded libstdc++ std::thread cannot start threads.
+// Code that needs a host thread uses ps3compat::thread (same interface).
+#pragma once
+#include_next <thread>
+#include "ps3_threads.h"
+
+namespace ps3compat {
+class thread {
+public:
+    thread() noexcept = default;
+    thread(const thread&) = delete;
+    thread& operator=(const thread&) = delete;
+    thread(thread&& other) noexcept : m_id(other.m_id) { other.m_id = 0; }
+    thread& operator=(thread&& other) noexcept {
+        if (joinable())
+            std::terminate();
+        m_id = other.m_id;
+        other.m_id = 0;
+        return *this;
+    }
+
+    template <typename F, typename... Args,
+              typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, thread>>>
+    explicit thread(F&& f, Args&&... args) {
+        using Bound = decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+        auto* state = new Bound(std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+        m_id = StartThread(
+            [](void* p) {
+                std::unique_ptr<Bound> owned(static_cast<Bound*>(p));
+                (*owned)();
+            },
+            state, kDefaultStackSize, "mkw_worker");
+        if (m_id == 0) {
+            delete state;
+            throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again),
+                                    "sysThreadCreate failed");
+        }
+    }
+
+    ~thread() {
+        if (joinable())
+            std::terminate();
+    }
+
+    bool joinable() const noexcept { return m_id != 0; }
+    void join() {
+        JoinThread(m_id);
+        m_id = 0;
+    }
+    void detach() {
+        DetachThread(m_id);
+        m_id = 0;
+    }
+    uint64_t get_id() const noexcept { return m_id; }
+    static unsigned hardware_concurrency() noexcept { return 2; }
+
+    static constexpr uint64_t kDefaultStackSize = 512 * 1024;
+
+private:
+    uint64_t m_id = 0;
+};
+} // namespace ps3compat

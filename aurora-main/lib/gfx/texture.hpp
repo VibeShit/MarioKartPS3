@@ -46,6 +46,13 @@ struct TextureRef {
   u32 gxFormat;
   bool hasArbitraryMips = false;
   bool isReplacement = false;
+#ifdef AURORA_RSX
+  // A8R8G8B8 linear image in RSX local memory (mip 0 only); released after the GPU is done with it.
+  void* rsxMemory = nullptr;
+  u32 rsxOffset = 0;
+  u32 rsxPitch = 0;
+  ~TextureRef();
+#endif
 
   TextureRef(wgpu::Texture texture, wgpu::TextureView sampleTextureView, wgpu::TextureView attachmentTextureView,
              wgpu::Extent3D size, wgpu::TextureFormat format, uint32_t mipCount, u32 gxFormat)

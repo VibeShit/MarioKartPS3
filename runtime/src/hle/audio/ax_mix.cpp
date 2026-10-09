@@ -28,6 +28,13 @@
 #include <string>
 #include <thread>
 
+#if defined(__PPU__)
+// The PS3 libstdc++ has no thread support; ps3compat::thread has the same interface.
+using MkwMixThread = ps3compat::thread;
+#else
+using MkwMixThread = std::thread;
+#endif
+
 namespace AxDspHle {
 namespace {
 
@@ -1348,7 +1355,7 @@ private:
         m_mixPending = false;
         m_mixBusy = false;
         try {
-            m_mixThread = std::thread([this] { MixWorkerMain(); });
+            m_mixThread = MkwMixThread([this] { MixWorkerMain(); });
         } catch (const std::system_error&) {
             RT_LOGF(RT_TAG_AUDIO, "failed to start the mix worker; mixing inline\n");
             std::fflush(stderr);
@@ -1417,7 +1424,7 @@ private:
     std::array<uint16_t, 3> m_lastAuxVolumes{};
 
     // Mix worker handshake.
-    std::thread m_mixThread;
+    MkwMixThread m_mixThread;
     mutable std::mutex m_mixMutex;
     std::condition_variable m_mixWake;  // guest -> worker
     std::condition_variable m_mixIdle;  // worker -> guest

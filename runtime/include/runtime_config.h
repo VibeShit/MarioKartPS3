@@ -175,6 +175,8 @@ inline bool IsSupportedGraphicsApi(std::string_view value) {
     static constexpr std::array<std::string_view, 2> values{"auto", "vulkan"};
 #elif defined(_WIN32)
     static constexpr std::array<std::string_view, 3> values{"auto", "d3d12", "vulkan"};
+#elif defined(__PPU__)
+    static constexpr std::array<std::string_view, 2> values{"auto", "rsx"};
 #endif
     return std::find(values.begin(), values.end(), value) != values.end();
 }
@@ -206,7 +208,7 @@ inline std::optional<std::filesystem::path> ExecutableDirectory() {
         }
         buffer.resize(buffer.size() * 2);
     }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__PPU__)
     return RuntimePlatform::ExecutableDirectory();
 #else
     // /proc/self/exe is a Linux-specific magic symlink to the running executable; readlink()
@@ -265,7 +267,7 @@ inline std::filesystem::path ApplicationDataDirectory() {
         CoTaskMemFree(rawPath);
         return directory;
     }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__PPU__)
     return RuntimePlatform::ApplicationDataDirectory(kApplicationDirectoryName);
 #else
     // XDG Base Directory spec equivalent of FOLDERID_LocalAppData: $XDG_DATA_HOME if set and

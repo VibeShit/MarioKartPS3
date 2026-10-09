@@ -22,6 +22,13 @@
 #include <optional>
 #include <vector>
 
+#ifdef AURORA_RSX
+// PS3 backend entry point (ps3/aurora/src/rsx_draw.cpp).
+namespace aurora::rsx {
+void draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxCount, uint32_t vtxStride) noexcept;
+} // namespace aurora::rsx
+#endif
+
 namespace aurora::gx::fifo {
 static Module Log("aurora::gx::fifo");
 
@@ -2156,6 +2163,10 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
 
   if (!has_complete_primitive(prim, vtxCount)) return true;
 
+#ifdef AURORA_RSX
+  rsx::draw(prim, fmt, vertices, vtxCount, vtxSize);
+  return true;
+#endif
   // This entry point bypasses process(), so it owns the renderer lock itself.
   std::unique_lock gpuLock(aurora::renderer_gpu_mutex());
   if (!admit_draw(prim, fmt, vtxCount, vertexBytes)) {
@@ -2206,6 +2217,13 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
     pos += totalVtxBytes;
     return true;
   }
+
+#ifdef AURORA_RSX
+  // The RSX backend renders immediately; no draw merging or staging.
+  rsx::draw(prim, fmt, data + pos, vtxCount, vtxSize);
+  pos += totalVtxBytes;
+  return true;
+#endif
 
   DrawData* mergeTarget = nullptr;
   // Decide admission before allocating anything. The merged path needs only

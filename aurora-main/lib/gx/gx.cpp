@@ -1134,6 +1134,7 @@ void clear_display_copy_cache() noexcept {
   g_gxState.displayCopyHeight = 0;
 }
 
+#if !defined(AURORA_RSX) // The RSX backend presents the display copy itself (rsx_api.cpp).
 void set_display_copy_present_source() noexcept {
   if (!g_gxState.displayCopyTexture) {
     return;
@@ -1144,6 +1145,7 @@ void set_display_copy_present_source() noexcept {
   webgpu::set_present_source_override(g_gxState.displayCopyBindGroup, g_gxState.displayCopyTexture->texture,
                                       g_gxState.displayCopyTexture->size, g_gxState.displayCopyTexture->format);
 }
+#endif
 
 void evict_copy_texture(const void* dest) noexcept {
   // Dynamic palette textures are keyed on the copy texture's raw TextureRef pointer; evicting the copy without them leaves entries that can match a recycled allocation at the same address and serve a stale conversion.
@@ -1369,6 +1371,7 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
   }
 }
 
+#if !defined(AURORA_RSX) // WebGPU pipeline state; the PS3 RSX backend maps GX state itself
 static inline wgpu::BlendFactor to_blend_factor(GXBlendFactor fac, bool isDst, bool alphaComponent) {
   switch (fac) {
     DEFAULT_FATAL("invalid blend factor {}", underlying(fac));
@@ -1559,6 +1562,8 @@ static inline wgpu::BlendState to_blend_state(GXBlendMode mode, GXBlendFactor sr
   };
 }
 
+#endif // !AURORA_RSX
+
 static inline bool effective_alpha_update(GXPixelFmt pixelFmt, bool alphaUpdate) {
   return alphaUpdate && render_target_has_alpha(pixelFmt);
 }
@@ -1567,6 +1572,7 @@ static inline u32 effective_dst_alpha(GXPixelFmt pixelFmt, bool alphaUpdate, u32
   return effective_alpha_update(pixelFmt, alphaUpdate) ? dstAlpha : UINT32_MAX;
 }
 
+#if !defined(AURORA_RSX) // WebGPU pipeline creation
 static inline wgpu::ColorWriteMask to_write_mask(bool colorUpdate, bool alphaUpdate) {
   wgpu::ColorWriteMask writeMask = wgpu::ColorWriteMask::None;
   if (colorUpdate) {
@@ -1644,6 +1650,8 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
   };
   return g_device.CreateRenderPipeline(&descriptor);
 }
+
+#endif // !AURORA_RSX
 
 u8 comp_type_size(GXAttr attr, GXCompType type) noexcept {
   switch (attr) {
@@ -1867,6 +1875,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   config.colorUpdate = g_gxState.colorUpdate;
 }
 
+#if !defined(AURORA_RSX) // WebGPU bind groups
 static TextureBindGroupCacheKey make_texture_bind_group_cache_key(const ShaderInfo& info) noexcept {
   TextureBindGroupCacheKey key{
       .sampledTextures = info.sampledTextures.to_ullong(),
@@ -1965,7 +1974,10 @@ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
   return bindGroups;
 }
 
+#endif // !AURORA_RSX
+
 void initialize() noexcept {
+#if !defined(AURORA_RSX)
   {
     std::array<wgpu::BindGroupLayoutEntry, MaxTextures * 2> textureEntries;
     for (u32 i = 0; i < MaxTextures; ++i) {
@@ -2038,10 +2050,12 @@ void initialize() noexcept {
     };
     sPipelineLayout = g_device.CreatePipelineLayout(&desc);
   }
+#endif
 }
 
 void shutdown() noexcept {
   // TODO we should probably store this all in g_state.gx instead
+#if !defined(AURORA_RSX)
   sSamplerBindGroupLayout = {};
   sTextureBindGroupLayout = {};
   {
@@ -2049,6 +2063,7 @@ void shutdown() noexcept {
     sUniformBindGroupLayouts.clear();
     sTextureBindGroupLayouts.clear();
   }
+#endif
   for (auto& item : g_gxState.textures) {
     item.ref.reset();
   }
@@ -2074,6 +2089,7 @@ void shutdown() noexcept {
 }
 } // namespace aurora::gx
 
+#if !defined(AURORA_RSX) // WebGPU samplers
 static wgpu::AddressMode wgpu_address_mode(GXTexWrapMode mode) {
   switch (mode) {
     DEFAULT_FATAL("invalid wrap mode {}", underlying(mode));
@@ -2156,3 +2172,4 @@ wgpu::SamplerDescriptor aurora::gfx::TextureBind::get_descriptor() const noexcep
       .maxAnisotropy = maxAnisotropy,
   };
 } // namespace aurora::gx
+#endif // !AURORA_RSX

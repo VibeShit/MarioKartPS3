@@ -8,6 +8,8 @@
 #include <immintrin.h>
 #elif defined(__aarch64__)
 #include <arm_neon.h>
+#elif defined(__PPU__)
+// Cell PPU: paired singles use generic GCC vectors (see ppc_isa_float.h).
 #else
 #error "ppc_isa_config.h has no SIMD intrinsics header for this architecture"
 #endif
@@ -35,4 +37,9 @@ inline constexpr bool MkwStateFreeAbiEnabled(uint32_t) noexcept
 #define MKW_PPC_COLD __attribute__((cold))
 
 
+#if defined(__clang__)
 using MkwStateFreeResult2 = uint64_t __attribute__((ext_vector_type(2)));
+#else
+// GCC spelling of the same two-lane integer vector (subscript and brace-init work alike).
+typedef uint64_t MkwStateFreeResult2 __attribute__((vector_size(16)));
+#endif

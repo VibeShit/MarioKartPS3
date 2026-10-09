@@ -17,6 +17,14 @@
 #include <pwd.h>
 #endif
 
+#if defined(__PPU__)
+// The PS3 build installs as a game package; everything lives under its USRDIR.
+#ifndef MKW_PS3_TITLE_ID
+#define MKW_PS3_TITLE_ID "MKWR00001"
+#endif
+#define MKW_PS3_USRDIR "/dev_hdd0/game/" MKW_PS3_TITLE_ID "/USRDIR"
+#endif
+
 namespace RuntimePlatform {
 
 std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
@@ -46,6 +54,8 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
     std::error_code ec;
     const auto resolved = std::filesystem::weakly_canonical(path, ec);
     return (ec ? std::filesystem::path(path) : resolved).parent_path();
+#elif defined(__PPU__)
+    return std::filesystem::path(MKW_PS3_USRDIR);
 #else
     return std::nullopt;
 #endif
@@ -66,6 +76,9 @@ std::filesystem::path ApplicationDataDirectory(std::string_view applicationName)
     if (const passwd* user = getpwuid(getuid()); user && user->pw_dir && *user->pw_dir) {
         return std::filesystem::path(user->pw_dir) / "Library" / "Application Support" / applicationName;
     }
+#elif defined(__PPU__)
+    (void)applicationName;
+    return std::filesystem::path(MKW_PS3_USRDIR) / "UserData";
 #endif
     return std::filesystem::current_path() / applicationName;
 }

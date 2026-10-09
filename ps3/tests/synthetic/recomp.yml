@@ -1,0 +1,37 @@
+schema_version: 1
+workspace_root: ../../..
+
+project:
+  id: ps3-synthetic
+  display_name: PS3 Synthetic Test
+  base_manifest_format: mkwii-recomp-base-manifest
+  base_manifest_stem: synthetic_base
+
+memory:
+  base: 0x80000000
+  size: 0x01A00000
+  sda_base: 0x80000000
+  sda2_base: 0x80000000
+
+inputs:
+  dol:
+    path: ps3/tests/synthetic/main.dol
+
+translation:
+  entry_points:
+    - 0x800042E0
+  function_map:
+    path: ps3/tests/synthetic/MAP.txt
+  allow_unsupported_instructions: false
+
+runtime:
+  native_registration_root: runtime/src
+  native_abi_directories:
+    - runtime/src/hle/gx
+
+output:
+  root: build/ps3-synthetic/generated
+  functions: functions
+  runtime_config: RuntimeConfig.h
+  data_initializer: data_sections_init.cpp
+  base_manifest: ../base/synthetic_base_manifest.json

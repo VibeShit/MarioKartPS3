@@ -445,6 +445,15 @@ void InitializeProcessTranscript(int argc, char** argv) {
         state.file.flush();
     }
 
+#if defined(__PPU__)
+    // lv2 has no pipes or dup2: send stdout/stderr straight into the transcript file.
+    state.file.close();
+    state.enabled = false;
+    (void)std::freopen(path.c_str(), "a", stdout);
+    (void)std::freopen(path.c_str(), "a", stderr);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+#else
     state.savedStdoutFd = DuplicateFileDescriptor(GetFileDescriptor(stdout));
     state.savedStderrFd = DuplicateFileDescriptor(GetFileDescriptor(stderr));
 
@@ -498,6 +507,7 @@ void InitializeProcessTranscript(int argc, char** argv) {
     state.stderrThread = std::thread([&state]() {
         PumpTranscriptPipe(state, state.stderrPipeReadFd, state.savedStderrFd);
     });
+#endif
 }
 
 void ShutdownProcessTranscript() {
@@ -1104,6 +1114,10 @@ void InstallSehLogger() {
         SetUnhandledExceptionFilter(UnhandledSehFilter);
     }
 }
+#elif defined(__PPU__)
+// lv2 delivers no POSIX signals for access faults; translated code on the PS3
+// only uses the checked memory path, which reports bad accesses as exceptions.
+void InstallPosixMemoryFaultHandler() {}
 #else
 // POSIX counterpart to SehLogger above. Unlike Windows' AddVectoredExceptionHandler, which lets
 // GuestFlat and this module each install their own handler and defensively re-check each other,
@@ -1404,6 +1418,10 @@ int RuntimeMain(int argc, char** argv) {
 #elif defined(_WIN32)
         static constexpr std::array<GraphicsBackendEntry, 3> kGraphicsBackends{{
             {"auto", BACKEND_AUTO}, {"d3d12", BACKEND_D3D12}, {"vulkan", BACKEND_VULKAN},
+        }};
+#elif defined(__PPU__)
+        static constexpr std::array<GraphicsBackendEntry, 2> kGraphicsBackends{{
+            {"auto", BACKEND_AUTO}, {"rsx", BACKEND_NULL},
         }};
 
 #endif

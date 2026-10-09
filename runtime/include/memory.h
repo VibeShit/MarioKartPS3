@@ -13,7 +13,13 @@ public:
     using DeferredReadCallback = bool (*)(void* user);
 
     static constexpr size_t kMem1Size = 24u * 1024u * 1024u;
+#if defined(__PPU__)
+    // PS3: retail-sized MEM2. The NDEV-sized 128 MiB mapping does not fit next to
+    // the translated executable in the PS3's 256 MiB of main memory.
+    static constexpr size_t kMem2Size = 64u * 1024u * 1024u;
+#else
     static constexpr size_t kMem2Size = 128u * 1024u * 1024u;
+#endif
     static constexpr uint32_t kMem1PhysicalBase = 0x00000000u;
     static constexpr uint32_t kMem1CachedBase = 0x80000000u;
     static constexpr uint32_t kMem1UncachedBase = 0xC0000000u;

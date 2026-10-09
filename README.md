@@ -181,6 +181,8 @@ translation, generating the manifest and build graph, and compiling, see [`trans
 
 For a step-by-step guide on compiling both WiiCompiled and Retro Rewind from source on macOS (Apple Silicon), see the [macOS Build Guide](docs/building-macos.md).
 
+For the experimental PlayStation 3 port (PSL1GHT, RSX renderer), see the [PS3 Build Guide](docs/building-ps3.md).
+
 ## FAQ
 
 **Is this an emulator?**
