@@ -22,9 +22,16 @@ void GXSetPointSize(u8 pointSize, GXTexOffset texOffsets);
 void GXEnableTexOffsets(GXTexCoordID coord, GXBool line_enable, GXBool point_enable);
 #ifdef TARGET_PC
 void GXSetArray(GXAttr attr, const void* data, u32 size, u8 stride, bool le);
+#ifdef __cplusplus
+// An overload cannot have C linkage under GCC.
+extern "C++" {
+#endif
 static inline void GXSetArray(GXAttr attr, const void* data, u32 size, u8 stride) {
   GXSetArray(attr, data, size, stride, false);
 }
+#ifdef __cplusplus
+}
+#endif
 #define GXSETARRAY(attr, data, size, stride, le) GXSetArray((attr), (data), (size), (stride), (le))
 #else
 void GXSetArray(GXAttr attr, const void* data, u8 stride);

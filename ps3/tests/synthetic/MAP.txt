@@ -1,0 +1,8 @@
+80004000 fib
+800040d4 op_add
+800040dc op_xor
+800040e4 op_rot
+800040f0 fill.constprop.0
+80004150 dot.constprop.0
+80004194 game_main
+800042e0 _start

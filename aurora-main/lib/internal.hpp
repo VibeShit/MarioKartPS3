@@ -25,6 +25,15 @@ using namespace std::string_view_literals;
 #endif
 #endif
 
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+// Every bswap in aurora converts between GX's big-endian data and host order,
+// so on a big-endian host (PS3) it is the identity.
+template <typename T>
+  requires((sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8) && std::is_arithmetic_v<T>)
+constexpr T bswap(T val) noexcept {
+  return val;
+}
+#else
 template <typename T>
   requires(sizeof(T) == sizeof(uint16_t) && std::is_arithmetic_v<T>)
 constexpr T bswap(T val) noexcept {
@@ -75,6 +84,7 @@ constexpr T bswap(T val) noexcept {
 #endif
   return v.t;
 }
+#endif
 
 template <typename T>
   requires(std::is_enum_v<T>)

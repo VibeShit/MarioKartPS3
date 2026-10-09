@@ -46,7 +46,7 @@ inline uint64_t PpcLoadPairPsqFloatBitsPackedInline(uint64_t value)
     const __m128i result = _mm_or_si128(
         lanes, _mm_and_si128(nanMask, _mm_set1_epi32(0x00400000)));
     return static_cast<uint64_t>(_mm_cvtsi128_si64(result));
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__PPU__)
     // Equivalent to applying PpcLoadPsqFloatBitsInline to each 32-bit lane: the
     // x86 body above only ever acts on these same two lanes (the upper 64 bits
     // _mm_cvtsi64_si128 zero-fills never survive the final truncating extract).
@@ -71,7 +71,7 @@ inline uint64_t PpcStorePairPsqFloatBitsPackedInline(uint64_t value)
         _mm_and_si128(subnormalMask, signedZero),
         _mm_andnot_si128(subnormalMask, quieted));
     return static_cast<uint64_t>(_mm_cvtsi128_si64(result));
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__PPU__)
     // Equivalent to applying PpcStorePsqFloatBitsInline to each 32-bit lane;
     // same reasoning as the load-side port above.
     const uint32_t lo = PpcStorePsqFloatBitsInline(static_cast<uint32_t>(value));
@@ -133,6 +133,11 @@ inline double PpcLoadPairPsqFloatFromHostInline(const uint8_t* host)
     std::memcpy(&raw, host, sizeof(raw));
     const uint64_t swapped = __builtin_bswap64(raw);
     return PpcBitCastToDoubleInline(PpcLoadPairPsqFloatBitsPackedInline(swapped));
+#elif defined(__PPU__)
+    // Big-endian host: guest bytes [ps0][ps1] already are the packed-double bits.
+    uint64_t raw = 0;
+    std::memcpy(&raw, host, sizeof(raw));
+    return PpcBitCastToDoubleInline(PpcLoadPairPsqFloatBitsPackedInline(raw));
 #endif
 }
 
@@ -149,6 +154,9 @@ inline void PpcStorePairPsqFloatToHostInline(uint8_t* host, double value)
     const uint64_t quieted = PpcStorePairPsqFloatBitsPackedInline(PpcBitCastToU64Inline(value));
     const uint64_t swapped = __builtin_bswap64(quieted);
     std::memcpy(host, &swapped, sizeof(swapped));
+#elif defined(__PPU__)
+    const uint64_t quieted = PpcStorePairPsqFloatBitsPackedInline(PpcBitCastToU64Inline(value));
+    std::memcpy(host, &quieted, sizeof(quieted));
 #endif
 }
 
@@ -264,9 +272,19 @@ inline void PpcWritePairPsqInline(uint32_t addr, T first, T second)
 // reading stale bytes, and unmapped pages commit on demand, same as MemoryInline::Flat* loads.
 MKW_PPC_FORCE_INLINE const uint8_t* PpcTryGetPsqReadableHostInline(uint32_t addr)
 {
+#if defined(MKW_GUEST_FLAT_UNAVAILABLE)
+    // No flat view (PS3): resolve through the readable page-bias table instead.
+    if (addr > UINT32_MAX - 7u) [[unlikely]]
+        return nullptr;
+    const uintptr_t encodedBias = MemoryInline::g_fullReadablePageBias[addr >> MemoryInline::kPageShift];
+    if (encodedBias == 0) [[unlikely]]
+        return nullptr;
+    return reinterpret_cast<const uint8_t*>((encodedBias - 1u) + addr);
+#else
     if (GuestFlat::RequiresCheckedAccess()) [[unlikely]]
         return nullptr;
     return MKW_FLAT_GUEST_BASE + addr;
+#endif
 }
 
 // Same reduction for stores. Still refuses a 32-bit address wrap (one host access can't
@@ -276,14 +294,21 @@ MKW_PPC_FORCE_INLINE const uint8_t* PpcTryGetPsqReadableHostInline(uint32_t addr
 // executable, and unmapped pages still trap.
 MKW_PPC_FORCE_INLINE uint8_t* PpcTryGetPsqWritableHostInline(uint32_t addr)
 {
+#if !defined(MKW_GUEST_FLAT_UNAVAILABLE)
     if (GuestFlat::RequiresCheckedAccess()) [[unlikely]]
         return nullptr;
+#endif
     if (addr > UINT32_MAX - 7u) [[unlikely]]
         return nullptr;
     if (MemoryInline::FlatWriteNeedsPolicy(addr) ||
         MemoryInline::FlatWriteNeedsPolicy(addr + 7u)) [[unlikely]]
         return nullptr;
+#if defined(MKW_GUEST_FLAT_UNAVAILABLE)
+    uint8_t* host = nullptr;
+    return MemoryInline::TryGetWritablePointerFast(addr, 8u, host) ? host : nullptr;
+#else
     return MKW_FLAT_GUEST_BASE + addr;
+#endif
 }
 
 inline double PpcLoadPairPsqFloatFastInline(uint32_t addr)
@@ -383,7 +408,7 @@ inline uint16_t PpcQuantizePairPsqU8Scale61PackedInline(double value)
     // Native lane 0 is ps1 and lane 1 is ps0. Packing to the low uint16_t
     // therefore produces the guest-order numeric value (ps0 << 8) | ps1.
     return static_cast<uint16_t>(_mm_cvtsi128_si32(lanes8));
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__PPU__)
     // Equivalent to two calls of the already-portable scalar quantizer above
     // (its own !(scaled > 0) rule maps NaN to 0, matching what MAXPS-with-zero
     // does on the x86 path per the comment there), packed the same way the

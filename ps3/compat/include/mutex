@@ -1,0 +1,40 @@
+// PS3 wrapper: adds std::mutex / std::recursive_mutex to the single-threaded
+// libstdc++ <mutex>. See ps3_threads.h.
+#pragma once
+#include_next <mutex>
+#include "ps3_threads.h"
+
+#if !defined(_GLIBCXX_HAS_GTHREADS) && !defined(MKW_PS3_STD_MUTEX_DEFINED)
+#define MKW_PS3_STD_MUTEX_DEFINED 1
+namespace std {
+class mutex : public ps3compat::SpinMutex {
+public:
+    using native_handle_type = mutex*;
+    constexpr mutex() noexcept = default;
+    native_handle_type native_handle() noexcept { return this; }
+};
+class recursive_mutex : public ps3compat::RecursiveSpinMutex {
+public:
+    using native_handle_type = recursive_mutex*;
+    constexpr recursive_mutex() noexcept = default;
+    native_handle_type native_handle() noexcept { return this; }
+};
+class timed_mutex : public ps3compat::SpinMutex {
+public:
+    constexpr timed_mutex() noexcept = default;
+    template <typename Rep, typename Period>
+    bool try_lock_for(const chrono::duration<Rep, Period>& d) {
+        return try_lock_until(chrono::steady_clock::now() + d);
+    }
+    template <typename Clock, typename Duration>
+    bool try_lock_until(const chrono::time_point<Clock, Duration>& t) {
+        while (!try_lock()) {
+            if (Clock::now() >= t)
+                return false;
+            ps3compat::SleepMicros(50);
+        }
+        return true;
+    }
+};
+} // namespace std
+#endif

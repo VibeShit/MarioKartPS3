@@ -1,0 +1,10 @@
+# WiiCompiled PS3 configuration.
+#
+# Copy the extracted DATA partition of your own clean PAL RMCP01 disc (the
+# directory that contains sys/ and files/) to
+#   /dev_hdd0/game/MKWR00001/USRDIR/DATA
+# or point dvd_root at wherever you put it. Relative paths are resolved from
+# this file's directory.
+
+[paths]
+dvd_root = "../DATA"

@@ -241,21 +241,38 @@ MKW_MEMORY_FORCE_INLINE uint8_t* ResolveRangeHost(uint32_t base, int32_t minOffs
     if (needsWrite &&
         (FlatWriteNeedsPolicy(guestStart) || FlatWriteNeedsPolicy(guestStart + (length - 1))))
         [[unlikely]] return nullptr;
+#if defined(MKW_GUEST_FLAT_UNAVAILABLE)
+    return nullptr;
+#else
     return MKW_FLAT_GUEST_BASE + guestStart;
+#endif
 }
 
 // Guest-address byte order. Distinct from isa/big_endian.h, which is the
 // host-pointer codec; do not "unify" them.
+// Guest data is big-endian, so on a big-endian host (PS3) these are identities.
 inline uint16_t ByteSwap16(uint16_t value) {
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    return value;
+#else
     return __builtin_bswap16(value);
+#endif
 }
 
 inline uint32_t ByteSwap32(uint32_t value) {
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    return value;
+#else
     return __builtin_bswap32(value);
+#endif
 }
 
 inline uint64_t ByteSwap64(uint64_t value) {
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    return value;
+#else
     return __builtin_bswap64(value);
+#endif
 }
 
 template <typename T>
@@ -537,6 +554,30 @@ MKW_MEMORY_FORCE_INLINE void WriteResolvedFloat64(uint8_t* r, uint32_t o, uint32
 // FlatWriteRam* remains direct because the translator emits it only for
 // addresses it has proven are ordinary RAM.
 
+#if defined(MKW_GUEST_FLAT_UNAVAILABLE)
+// No flat view: FlatLoad/FlatStore are only reached from the check-free
+// FlatWriteRam* family, which must still honor the page table here.
+template <typename T>
+MKW_MEMORY_FORCE_INLINE T FlatLoad(uint32_t address) {
+    T value{};
+    if (TryReadGuestScalar(address, value)) [[likely]]
+        return value;
+    if constexpr (sizeof(T) == 1) return Memory::Read8(address);
+    else if constexpr (sizeof(T) == 2) return Memory::Read16(address);
+    else if constexpr (sizeof(T) == 4) return Memory::Read32(address);
+    else return Memory::Read64(address);
+}
+
+template <typename T>
+MKW_MEMORY_FORCE_INLINE void FlatStore(uint32_t address, T value) {
+    if (TryWriteGuestScalar(address, value)) [[likely]]
+        return;
+    if constexpr (sizeof(T) == 1) Write8Slow(address, value);
+    else if constexpr (sizeof(T) == 2) Write16Slow(address, value);
+    else if constexpr (sizeof(T) == 4) Write32Slow(address, value);
+    else Write64Slow(address, value);
+}
+#else
 template <typename T>
 MKW_MEMORY_FORCE_INLINE T FlatLoad(uint32_t address) {
     T value{};
@@ -549,6 +590,7 @@ MKW_MEMORY_FORCE_INLINE void FlatStore(uint32_t address, T value) {
     const T swapped = MaybeByteSwap(value);
     std::memcpy(MKW_FLAT_GUEST_BASE + address, &swapped, sizeof(T));
 }
+#endif
 
 MKW_MEMORY_FORCE_INLINE uint8_t FlatRead8(uint32_t address) {
     if (GuestFlat::RequiresCheckedAccess()) return Memory::Read8(address);
