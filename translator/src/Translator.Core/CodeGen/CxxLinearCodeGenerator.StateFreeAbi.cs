@@ -475,9 +475,14 @@ public sealed partial class CxxLinearCodeGenerator
         for (var hid = 0; hid < 3; ++hid)
             if ((contract.HidPossibleWriteMask & (1 << hid)) != 0)
                 values.Add(packed ? $"static_cast<uint64_t>(native_hid{hid})" : $"native_hid{hid}");
-        return values.Count == 1
-            ? $"return {values[0]};"
-            : $"return {{ {string.Join(", ", values)} }};";
+        // GCC vectors require an explicitly typed initializer in a return;
+        // a bare braced list only works with Clang's ext_vector_type.
+        return values.Count switch
+        {
+            1 => $"return {values[0]};",
+            2 => $"return MkwStateFreeResult2{{ {string.Join(", ", values)} }};",
+            _ => $"return {{ {string.Join(", ", values)} }};"
+        };
     }
 
     private static string RemoveStateFreeDirectCallFallbacks(string body)

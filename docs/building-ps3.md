@@ -12,8 +12,7 @@ aurora's WebGPU renderer with an RSX backend. The result is a homebrew
 ## Requirements
 
 - A PS3 that runs homebrew (CFW/HEN), or RPCS3.
-- Podman or Docker, and the PSL1GHT SDK image `ghcr.io/altps3/ps3dev:latest`
-  (any image with `PS3DEV`/`PSL1GHT` set up works, see `PS3DEV_IMAGE`).
+- Podman or Docker, and the PSL1GHT SDK image
 - The .NET 8 SDK on the host, for the translator.
 - Your own PAL `RMCP01` disc, extracted exactly as in
   [building-macos.md](building-macos.md#3-step-1-extract-disc-assets):

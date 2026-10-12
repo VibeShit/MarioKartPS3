@@ -19,6 +19,28 @@ if(NOT PS3)
     message(FATAL_ERROR "Configure with -DCMAKE_TOOLCHAIN_FILE=ps3/cmake/ps3.toolchain.cmake")
 endif()
 
+# Check before fetching dependencies or compiling hundreds of sources. Older
+# ps3dev images ship GCC 7, which cannot compile the shared C++20 runtime.
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_FLAGS "-std=gnu++20")
+check_cxx_source_compiles("
+    #include <bit>
+    #include <span>
+    template<class T> concept Integral = requires(T value) { value + 1; };
+    static_assert(Integral<int>);
+    static_assert(std::bit_cast<unsigned>(1.0f) != 0);
+    int main() { int values[1] = {}; return std::span<int>(values)[0]; }
+" MKW_PS3_HAS_CXX20)
+unset(CMAKE_REQUIRED_FLAGS)
+if(NOT MKW_PS3_HAS_CXX20)
+    message(FATAL_ERROR
+        "The PS3 PPU compiler (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}) "
+        "and its libstdc++ must support C++20, including concepts, <bit> and <span>. "
+        "The ghcr.io/altps3/ps3dev:latest image has been observed shipping GCC 7.2.0, "
+        "which is too old. Use a PSL1GHT SDK image with a C++20-capable PPU toolchain "
+        "via PS3DEV_IMAGE; see docs/building-ps3.md. Downgrading -std will not fix this.")
+endif()
+
 get_filename_component(MKW_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(MKW_PS3_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set(MKW_RUNTIME_DIR "${MKW_ROOT}/runtime")
