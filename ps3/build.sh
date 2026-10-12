@@ -11,7 +11,8 @@
 #   ps3/build.sh --synthetic          # pipeline self-test with ps3/tests/synthetic (no game data)
 #
 # Environment:
-#   PS3DEV_IMAGE   container image with the PS3 SDK (default ghcr.io/altps3/ps3dev:latest)
+#   PS3DEV_IMAGE   container image with the PS3 SDK (default: mkw-ps3dev, built from
+#                  ps3/Containerfile on the ps3dev/ps3toolchain nightly)
 #   CONTAINER      container engine: podman or docker (default: whichever is installed)
 #   JOBS           parallel compile jobs (default: nproc)
 #   EXTRA_CMAKE_ARGS  extra arguments for the PS3 CMake configure step
@@ -19,7 +20,7 @@ set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 workspace=$(cd "$script_dir/.." && pwd)
-image=${PS3DEV_IMAGE:-ghcr.io/altps3/ps3dev:latest}
+image=${PS3DEV_IMAGE:-}
 jobs=${JOBS:-$(nproc 2>/dev/null || echo 4)}
 synthetic=0
 skip_translate=0
@@ -75,6 +76,14 @@ if (( ! skip_translate )); then
         --base-metadata "$generated/base_translation_output.json" \
         --base-functions-dir "$generated/functions" \
         --native-source-dir "$workspace/runtime/src" --out "$generated/build_shards"
+fi
+
+if [[ -z "$image" ]]; then
+    image=localhost/mkw-ps3dev:latest
+    if ! "$CONTAINER" image inspect "$image" >/dev/null 2>&1; then
+        echo "== building the PS3 SDK image (one time)"
+        "$CONTAINER" build -t "$image" -f "$script_dir/Containerfile" "$script_dir"
+    fi
 fi
 
 echo "== compiling for PS3 in $image"
