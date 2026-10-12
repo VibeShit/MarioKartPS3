@@ -1,0 +1,41 @@
+# PS3 SDK image for ps3/build.sh: the prebuilt ps3dev/ps3toolchain nightly (GCC 13, binutils 2.42),
+# with PSL1GHT and mbedTLS built on top and the host tools the build needs.
+#
+#   podman build -t mkw-ps3dev -f ps3/Containerfile ps3
+#
+# ps3/build.sh builds this automatically when PS3DEV_IMAGE is not set.
+
+# The nightly binaries are built on ubuntu-latest; match its glibc.
+FROM ubuntu:24.04
+
+ARG PS3TOOLCHAIN_RELEASE=nightly-2026-10-11
+ARG PSL1GHT_REF=master
+ARG PS3LIBRARIES_REF=master
+
+ENV PS3DEV=/usr/local/ps3dev
+ENV PSL1GHT=/usr/local/ps3dev
+ENV PATH=${PATH}:/usr/local/ps3dev/bin:/usr/local/ps3dev/ppu/bin:/usr/local/ps3dev/spu/bin
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        autoconf automake bison build-essential bzip2 ca-certificates cmake curl flex git \
+        libelf-dev libgmp-dev libncurses-dev libssl-dev libtool-bin make ninja-build patch \
+        pkg-config python3 python-is-python3 texinfo wget xz-utils zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /usr/local \
+    && curl -fsSL "https://github.com/ps3dev/ps3toolchain/releases/download/${PS3TOOLCHAIN_RELEASE}/ps3dev-linux-X64.tar.gz" \
+        | tar -xz -C /usr/local \
+    && mkdir -p ${PS3DEV}/bin ${PS3DEV}/portlibs/ppu/lib ${PS3DEV}/portlibs/ppu/include
+
+RUN git clone --depth 1 --branch "${PSL1GHT_REF}" https://github.com/ps3dev/PSL1GHT /tmp/psl1ght \
+    && make -C /tmp/psl1ght install-ctrl \
+    && make -C /tmp/psl1ght -j"$(nproc)" \
+    && make -C /tmp/psl1ght install \
+    && rm -rf /tmp/psl1ght
+
+RUN git clone --depth 1 --branch "${PS3LIBRARIES_REF}" https://github.com/ps3dev/ps3libraries /tmp/ps3libraries \
+    && /tmp/ps3libraries/libraries.sh 018 \
+    && rm -rf /tmp/ps3libraries
+
+WORKDIR /src
