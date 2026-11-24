@@ -4,6 +4,7 @@
 
 #include "internal.hpp"
 
+#include <ppu-asm.h>
 #include <rsx/nv40.h>
 #include <rsx/rsx.h>
 #include <sysutil/video.h>
@@ -23,9 +24,12 @@ gcmContextData* g_ctx = nullptr;
 namespace {
 Module Log("aurora::rsx");
 
-constexpr uint32_t kCommandBufferSize = 0x200000;
-// Command buffer followed by two halves of streaming memory (vertices, fragment programs).
-constexpr uint32_t kHostSize = 32u * 1024u * 1024u;
+constexpr uint32_t kCommandBufferSize = 0x80000;
+// Only the command buffer lives in main RAM, which is tight next to the game code and guest RAM.
+constexpr uint32_t kHostSize = 1024u * 1024u;
+// Two halves of streaming memory (vertices, fragment programs) in RSX local memory; the PPU
+// only writes them.
+constexpr uint32_t kStreamSize = 6u * 1024u * 1024u;
 constexpr uint32_t kDisplayBufferCount = 2;
 constexpr uint8_t kLabelFrame = 200;
 constexpr uint8_t kLabelIdle = 201;
@@ -71,6 +75,21 @@ void wait_label(uint8_t index, uint32_t value) {
 }
 
 uint32_t stream_half_offset(uint32_t frame) { return (frame & 1u) * g_streamHalfSize; }
+
+// RPCS3's gcm callback hands out 32 KiB segments and can wait forever for the GPU to leave the
+// next one. Use the whole buffer instead and jump back to its start once the GPU has caught up.
+s32 wrap_command_buffer(gcmContextData* context, u32) {
+  const uint32_t begin = local_offset(context->begin);
+  *context->current = 0x20000000u | begin; // jump
+  __asm__ volatile("sync" ::: "memory");
+  volatile gcmControlRegister* ctrl = gcmGetControlRegister();
+  ctrl->put = begin;
+  while (ctrl->get != begin) {
+    usleep(30);
+  }
+  context->current = context->begin;
+  return 0;
+}
 
 void process_frees(bool all) {
   std::lock_guard lock(g_freeMutex);
@@ -196,6 +215,8 @@ bool initialize() noexcept {
     Log.error("rsxInit failed");
     return false;
   }
+  g_ctx->end = reinterpret_cast<u32*>(static_cast<uint8_t*>(g_hostMemory) + kCommandBufferSize - 4);
+  g_ctx->callback = reinterpret_cast<gcmContextCallback>(__get_opd32(wrap_command_buffer));
 
   videoState state{};
   if (videoGetState(0, 0, &state) != 0 || state.state != 0) {
@@ -222,8 +243,8 @@ bool initialize() noexcept {
   }
   gcmResetFlipStatus();
 
-  g_streamBase = static_cast<uint8_t*>(g_hostMemory) + kCommandBufferSize;
-  g_streamHalfSize = ((kHostSize - kCommandBufferSize) / 2) & ~0xFFFu;
+  g_streamBase = static_cast<uint8_t*>(local_alloc(kStreamSize, 4096));
+  g_streamHalfSize = kStreamSize / 2;
 
   // The EFB keeps the display's aspect ratio; GX's logical viewport is scaled into it.
   const float displayAspect = state.displayMode.aspect == VIDEO_ASPECT_4_3
@@ -333,8 +354,20 @@ void end_frame() noexcept {
   rsxSetClearColor(g_ctx, 0);
   prepare_clear();
   rsxClearSurface(g_ctx, GCM_CLEAR_R | GCM_CLEAR_G | GCM_CLEAR_B | GCM_CLEAR_A);
+  QuadDraw quad;
   if (g_presentTexture && g_presentTexture->rsxMemory != nullptr) {
-    const auto& tex = *g_presentTexture;
+    quad.texOffset = g_presentTexture->rsxOffset;
+    quad.texPitch = g_presentTexture->rsxPitch;
+    quad.texWidth = g_presentTexture->size.width;
+    quad.texHeight = g_presentTexture->size.height;
+  } else {
+    // No display copy this frame: show the EFB.
+    quad.texOffset = g_efb.colorOffset;
+    quad.texPitch = g_efb.colorPitch;
+    quad.texWidth = g_efb.width;
+    quad.texHeight = g_efb.height;
+  }
+  {
     float w = static_cast<float>(g_displayWidth);
     float h = static_cast<float>(g_displayHeight);
     const float aspect = present_aspect();
@@ -345,11 +378,6 @@ void end_frame() noexcept {
         h = w / aspect;
       }
     }
-    QuadDraw quad;
-    quad.texOffset = tex.rsxOffset;
-    quad.texPitch = tex.rsxPitch;
-    quad.texWidth = tex.size.width;
-    quad.texHeight = tex.size.height;
     quad.x0 = (static_cast<float>(g_displayWidth) - w) * 0.5f;
     quad.y0 = (static_cast<float>(g_displayHeight) - h) * 0.5f;
     quad.x1 = quad.x0 + w;

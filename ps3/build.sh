@@ -45,6 +45,9 @@ if (( synthetic )); then
     generated_root=$workspace/build/ps3-synthetic
     build_dir=$workspace/build/ps3-synthetic/native
     entry=0x800042E0
+    [[ -f "$workspace/ps3/tests/synthetic/main.dol" ]] ||
+        python3 "$workspace/ps3/tests/synthetic/elf2dol.py" "$workspace/ps3/tests/synthetic/game.elf" \
+            "$workspace/ps3/tests/synthetic/main.dol"
     EXTRA_CMAKE_ARGS="-DMKW_PS3_SYNTHETIC=ON ${EXTRA_CMAKE_ARGS:-}"
 else
     project=$workspace/projects/mkwii/recomp.yml
@@ -86,6 +89,21 @@ if [[ -z "$image" ]]; then
     fi
 fi
 
+# aurora is a submodule; the RSX backend hooks live in ps3/patches/aurora.patch and are applied
+# to a copy so the submodule checkout stays clean.
+aurora_dir=$build_dir/aurora-src
+echo "== preparing patched aurora in $aurora_dir"
+[[ -f "$workspace/aurora-main/include/aurora/aurora.h" ]] || git -C "$workspace" submodule update --init aurora-main
+# Re-extract only when aurora or the patch changes, so unchanged sources keep their mtimes.
+aurora_stamp="$(git -C "$workspace/aurora-main" rev-parse HEAD) $(sha256sum < "$script_dir/patches/aurora.patch")"
+if [[ "$(cat "$aurora_dir/.stamp" 2>/dev/null)" != "$aurora_stamp" ]]; then
+    rm -rf "$aurora_dir"
+    mkdir -p "$aurora_dir"
+    git -C "$workspace/aurora-main" archive HEAD | tar -x -C "$aurora_dir"
+    patch -s -p1 -d "$aurora_dir" < "$script_dir/patches/aurora.patch"
+    echo "$aurora_stamp" > "$aurora_dir/.stamp"
+fi
+
 echo "== compiling for PS3 in $image"
 # The translator writes absolute paths (incbin, shard lists), so the workspace is
 # mounted at the same path inside the container.
@@ -94,7 +112,7 @@ echo "== compiling for PS3 in $image"
     export PS3DEV=\${PS3DEV:-/usr/local/ps3dev} PSL1GHT=\${PSL1GHT:-\${PS3DEV}}
     cmake -S ps3 -B '$build_dir' -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_TOOLCHAIN_FILE='$workspace/ps3/cmake/ps3.toolchain.cmake' \
-        -DMKW_GENERATED_ROOT='$generated_root' ${EXTRA_CMAKE_ARGS:-}
+        -DMKW_GENERATED_ROOT='$generated_root' -DMKW_AURORA_DIR='$aurora_dir' ${EXTRA_CMAKE_ARGS:-}
     cmake --build '$build_dir' -j $jobs
 "
 echo "== done: $build_dir/WiiCompiled.pkg (and wiicompiled.self for ps3load)"

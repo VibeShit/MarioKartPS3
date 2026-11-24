@@ -4,11 +4,19 @@
 
 #include "rsx_backend.hpp"
 
-#include "gx/frame_interpolation.hpp"
+#include "device.hpp"
+#include "gamepad.hpp"
+#include "gfx/presentation.hpp"
+#include "gfx/readback/readback.hpp"
 #include "gx/fifo.hpp"
-#include "input.hpp"
+#include "gx/readback.hpp"
+#include "gx/frame_interpolation.hpp"
+#include "gx/texture.hpp"
+#include "input/sdl_input.hpp"
 #include "internal.hpp"
 #include "window.hpp"
+
+#include <aurora/input.hpp>
 
 #include <aurora/aurora.h>
 #include <aurora/event.h>
@@ -43,15 +51,23 @@ void sysutil_callback(u64 status, u64, void*) {
   }
 }
 
+// Mirrors window.cpp's process_event for the events the PS3 produces.
 void process_event(const SDL_Event& event) {
+  if (input::sdl::is_routed_event(event)) {
+    input::sdl::dispatch(event);
+  }
   switch (event.type) {
   case SDL_EVENT_GAMEPAD_ADDED: {
-    const auto instance = input::add_controller(event.gdevice.which);
+    const auto instance = gamepad::add_controller(event.gdevice.which);
+    if (instance != 0 && instance != static_cast<SDL_JoystickID>(-1)) {
+      input::sdl::gamepad_added(instance);
+    }
     g_events.push_back(AuroraEvent{.type = AURORA_CONTROLLER_ADDED, .controller = instance});
     break;
   }
   case SDL_EVENT_GAMEPAD_REMOVED:
-    input::remove_controller(event.gdevice.which);
+    input::sdl::gamepad_removed(event.gdevice.which);
+    gamepad::remove_controller(event.gdevice.which);
     g_events.push_back(AuroraEvent{.type = AURORA_CONTROLLER_REMOVED, .controller = event.gdevice.which});
     break;
   case SDL_EVENT_QUIT:
@@ -75,6 +91,7 @@ float present_aspect() noexcept { return g_lockedAspect; }
 } // namespace aurora::rsx
 
 namespace aurora::window {
+SDL_Window* get_sdl_window() { return nullptr; }
 AuroraWindowSize get_window_size() {
   const uint32_t width = rsx::efb_target().width;
   const uint32_t height = rsx::efb_target().height;
@@ -126,8 +143,50 @@ std::array<gfx::Range, MaxInterpolatedFrames> record_interpolation_draw(const Fr
 }
 void extend_interpolation_draw(uint16_t) noexcept {}
 GXBindGroups build_bind_groups(const ShaderInfo&) noexcept { return {}; }
-void set_display_copy_present_source() noexcept { rsx::set_present_texture(g_gxState.displayCopyTexture); }
+
+// No readback streams are offered on the RSX (gfx::readback is not built): captures are refused,
+// so none reach the FIFO; the handlers only keep the stream in sync if one does.
+namespace readback {
+GXBool capture_peeks(AuroraReadbackStream, const AuroraReadbackPeekRequest*, u32, GXAlphaReadMode) { return GX_FALSE; }
+GXBool capture_copies(AuroraReadbackStream, const AuroraReadbackCopySrc*, u32) { return GX_FALSE; }
+GXBool get(AuroraReadbackStream, AuroraReadbackDest* dests, u32 count) {
+  for (u32 i = 0; dests != nullptr && i < count; ++i) {
+    dests[i].found = GX_FALSE;
+  }
+  return GX_FALSE;
+}
+void handle_capture_peeks(ByteReader& reader) {
+  reader.skip(8 + 8);
+  const uint32_t count = reader.read<u32>();
+  reader.skip(1 + static_cast<size_t>(count) * (8 + 1 + 2 + 2));
+}
+void handle_capture_copies(ByteReader& reader) {
+  reader.skip(8 + 8);
+  const uint32_t count = reader.read<u32>();
+  reader.skip(static_cast<size_t>(count) * (8 + 8));
+}
+} // namespace readback
 } // namespace aurora::gx
+
+namespace aurora::gfx::readback {
+StreamHandle create_stream() { return 0; }
+void destroy_stream(StreamHandle) {}
+} // namespace aurora::gfx::readback
+
+namespace aurora::webgpu {
+bool g_bcTexturesSupported = false;
+bool g_textureComponentSwizzleSupported = false;
+} // namespace aurora::webgpu
+
+// DualShock rumble goes through the SDL gamepad; there is no device-level haptic.
+namespace aurora::device {
+bool rumble_available() noexcept { return false; }
+void rumble(uint16_t, uint16_t, uint16_t) noexcept {}
+} // namespace aurora::device
+
+namespace aurora::imgui {
+void set_cursor_managed(bool) noexcept {}
+} // namespace aurora::imgui
 
 using namespace aurora;
 
@@ -144,9 +203,6 @@ AuroraInfo aurora_initialize(int, char*[], const AuroraConfig* config) {
   }
   if (g_config.resourcesPath == nullptr) {
     g_config.resourcesPath = SDL_GetBasePath();
-  }
-  if (g_config.pipelineCachePath == nullptr) {
-    g_config.pipelineCachePath = g_config.cachePath;
   }
   g_config.msaa = 1;
 
@@ -177,7 +233,7 @@ void aurora_shutdown() {
 const AuroraEvent* aurora_update() {
   if (g_initialFrame) {
     g_initialFrame = false;
-    input::initialize();
+    gamepad::initialize();
   }
   g_events.clear();
   sysUtilCheckCallback();
@@ -188,28 +244,49 @@ const AuroraEvent* aurora_update() {
   if (g_exitRequested.exchange(false)) {
     g_events.push_back(AuroraEvent{.type = AURORA_EXIT});
   }
+  input::reconcile();
   g_events.push_back(AuroraEvent{.type = AURORA_NONE});
+  gamepad::update();
   return g_events.data();
 }
 
-bool aurora_begin_frame() {
+bool aurora_begin_frame_window() { return true; }
+
+bool aurora_begin_frame_gx() {
   if (!g_frameActive) {
+    gx::update();
     std::lock_guard lock(g_rendererGpuMutex);
     rsx::begin_frame();
+    gx::fifo::begin_frame();
+    gx::flush_texture_destructions();
     g_frameActive = true;
   }
   return true;
 }
 
-void aurora_end_frame() {
+bool aurora_begin_frame() { return aurora_begin_frame_window() && aurora_begin_frame_gx(); }
+
+AuroraImguiFrame* aurora_end_frame_window() { return nullptr; }
+void aurora_release_imgui_frame(AuroraImguiFrame*) {}
+
+void aurora_end_frame_gx(AuroraImguiFrame*) {
+  gx::flush_texture_destructions();
   gx::fifo::drain();
+  gx::fifo::end_frame();
+  gx::texture::end_frame();
   std::lock_guard lock(g_rendererGpuMutex);
   if (!g_frameActive) {
     rsx::begin_frame();
   }
+  // A display copy (the XFB) is what reaches the screen; without one the EFB is shown.
+  auto& gxState = gx::g_gxState;
+  rsx::set_present_texture(gxState.displayCopyProduced ? gxState.displayCopyTexture : gfx::TextureHandle{});
+  gxState.displayCopyProduced = false;
   rsx::end_frame();
   g_frameActive = false;
 }
+
+void aurora_end_frame() { aurora_end_frame_gx(nullptr); }
 
 void aurora_set_frame_worker_wait_callback(AuroraFrameWorkerWaitCallback) {}
 void aurora_wait_for_frame_worker() {}
@@ -238,8 +315,27 @@ const AuroraBackend* aurora_get_available_backends(size_t* count) {
 }
 
 void aurora_pop_debug_group() {}
+void pop_debug_group() {}
+void aurora_set_skip_unready_pipelines(bool) {}
 const AuroraStats* aurora_get_stats() { return &gfx::g_stats; }
+
+namespace {
+AuroraGuestWriteGenerationCallback g_guestWriteGeneration = nullptr;
+AuroraGuestWriteNotifyCallback g_guestWriteNotify = nullptr;
+} // namespace
+
+namespace aurora::gfx::presentation {
+uint64_t guest_write_generation(const void* hostPtr, size_t size) noexcept {
+  return g_guestWriteGeneration != nullptr ? g_guestWriteGeneration(hostPtr, size) : AURORA_GUEST_WRITE_UNTRACKED;
+}
+void notify_guest_write(const void* hostPtr, size_t size) noexcept {
+  if (g_guestWriteNotify != nullptr) {
+    g_guestWriteNotify(hostPtr, size);
+  }
+}
+} // namespace aurora::gfx::presentation
+
 void aurora_set_guest_write_hooks(AuroraGuestWriteGenerationCallback generation, AuroraGuestWriteNotifyCallback notify) {
-  g_guestWriteGenerationHook = generation;
-  g_guestWriteNotifyHook = notify;
+  g_guestWriteGeneration = generation;
+  g_guestWriteNotify = notify;
 }

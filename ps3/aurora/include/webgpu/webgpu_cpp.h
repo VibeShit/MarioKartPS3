@@ -58,10 +58,18 @@ enum class TextureFormat : uint32_t {
     RGBA8Unorm,
     BGRA8Unorm,
     RGBA16Float,
+    RGB10A2Unorm,
+    R32Float,
     BC1RGBAUnorm,
+    BC3RGBAUnorm,
+    BC5RGUnorm,
+    BC7RGBAUnorm,
+    ASTC4x4Unorm, ASTC4x4UnormSrgb, ASTC5x4Unorm, ASTC5x4UnormSrgb, ASTC5x5Unorm, ASTC5x5UnormSrgb, ASTC6x5Unorm, ASTC6x5UnormSrgb, ASTC6x6Unorm, ASTC6x6UnormSrgb, ASTC8x5Unorm, ASTC8x5UnormSrgb, ASTC8x6Unorm, ASTC8x6UnormSrgb, ASTC8x8Unorm, ASTC8x8UnormSrgb, ASTC10x5Unorm, ASTC10x5UnormSrgb, ASTC10x6Unorm, ASTC10x6UnormSrgb, ASTC10x8Unorm, ASTC10x8UnormSrgb, ASTC10x10Unorm, ASTC10x10UnormSrgb, ASTC12x10Unorm, ASTC12x10UnormSrgb, ASTC12x12Unorm, ASTC12x12UnormSrgb,
     Depth24Plus,
     Depth32Float,
 };
+enum class LoadOp : uint32_t { Undefined, Load, Clear };
+enum class StoreOp : uint32_t { Undefined, Store, Discard };
 enum class BackendType : uint32_t { Undefined, Null };
 enum class FilterMode : uint32_t { Undefined, Nearest, Linear };
 enum class MipmapFilterMode : uint32_t { Undefined, Nearest, Linear };
@@ -104,6 +112,8 @@ struct Color {
     double b = 0.0;
     double a = 0.0;
 };
+struct AdapterInfo {};
+struct Limits {};
 using StringView = std::string_view;
 
 } // namespace wgpu

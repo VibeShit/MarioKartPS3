@@ -5,6 +5,7 @@
 //   Config.toml settings the overlay would otherwise apply at startup.
 // * controller_mapping_wizard: part of the same ImGui UI.
 // * DiscordPresence: talks to a local Discord client over a Unix socket.
+// * SteamInputLayout: asks a desktop Steam client to switch controller layouts.
 
 #include "audio_backend.h"
 #include "controller_mapping_wizard.h"
@@ -14,6 +15,7 @@
 #include "music_attenuation.h"
 #include "runtime_config.h"
 #include "settings_overlay.h"
+#include "steam_input_layout.h"
 
 #include <dolphin/pad.h>
 
@@ -61,3 +63,9 @@ void SetActivity(Activity) {}
 void Reset() {}
 void Shutdown() {}
 } // namespace DiscordPresence
+
+namespace SteamInputLayout {
+void Initialize(bool, uint32_t) {}
+void HandleEvents(const AuroraEvent*) {}
+void Release() noexcept {}
+} // namespace SteamInputLayout

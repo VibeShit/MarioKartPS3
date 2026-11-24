@@ -13,7 +13,8 @@
 SYS_PROCESS_PARAM(1001, 0x100000);
 
 namespace {
-__attribute__((constructor(101))) void ps3_initialize_system_modules() {
+// After PSL1GHT's libc setup (constructors 103-105), before ordinary static constructors.
+__attribute__((constructor(110))) void ps3_initialize_system_modules() {
   sysModuleLoad(SYSMODULE_FS);
   sysModuleLoad(SYSMODULE_IO);
   sysModuleLoad(SYSMODULE_AUDIO);

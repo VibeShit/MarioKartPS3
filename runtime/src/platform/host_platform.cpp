@@ -1,6 +1,7 @@
 #include "platform/host_platform.h"
 
 #include <cstdlib>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -56,6 +57,18 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
     return (ec ? std::filesystem::path(path) : resolved).parent_path();
 #elif defined(__PPU__)
     return std::filesystem::path(MKW_PS3_USRDIR);
+#elif defined(__linux__)
+    std::vector<char> buffer(256);
+    for (;;) {
+        const auto length = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
+        if (length < 0) {
+            return std::nullopt;
+        }
+        if (static_cast<std::size_t>(length) < buffer.size()) {
+            return std::filesystem::path(std::string(buffer.data(), length)).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
 #else
     return std::nullopt;
 #endif
