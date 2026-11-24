@@ -8,7 +8,7 @@
 
 #include "gfx/clear.hpp"
 #include "gfx/depth_peek.hpp"
-#include "gfx/efb_ram_copy.hpp"
+#include "gfx/recording.hpp"
 #include "gfx/tex_copy_conv.hpp"
 #include "gfx/tex_palette_conv.hpp"
 #include "gfx/texture_convert.hpp"
@@ -205,11 +205,12 @@ void end_offscreen() {
   rsx::apply_viewport_scissor();
 }
 
-void resolve_pass(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
-                  Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat,
-                  const Vec4<float>* sourceRectPixels, bool halfScale, const std::array<u32, 3>*, bool forceOpaqueAlpha,
-                  float, bool, bool, bool) {
-  (void)halfScale;
+void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
+                       Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat,
+                       GXPixelFmt sourceFormat, const ResolveOptions&) {
+  // Without EFB alpha the copy reads opaque alpha.
+  const bool forceOpaqueAlpha = !gx::efb_has_alpha(sourceFormat);
+  const Vec4<float>* sourceRectPixels = nullptr;
   const rsx::Target source = rsx::current_target();
   const auto targetWidth = static_cast<int32_t>(source.width);
   const auto targetHeight = static_cast<int32_t>(source.height);
@@ -293,45 +294,11 @@ void clear_caches() noexcept {}
 void push_debug_group(std::string) {}
 void insert_debug_marker(std::string) {}
 
-// Inert WebGPU staging surface (see file comment).
-Range push_verts(const uint8_t*, size_t) { return {}; }
-Range push_indices(const uint8_t*, size_t) { return {}; }
-Range push_uniform(const uint8_t*, size_t) { return {}; }
-Range push_storage(const uint8_t*, size_t) { return {}; }
-std::pair<ByteBuffer, Range> map_uniform(size_t length) { return {ByteBuffer{length}, Range{}}; }
+// The draw path is redirected to rsx::draw, so only DRAW_INDEXED's index upload remains.
+Range push_indices(const uint8_t*, size_t, size_t) { return {}; }
 uint32_t align_uniform(uint32_t value) { return (value + 255u) & ~255u; }
-uint64_t staging_uniform_bytes(uint64_t bytes) { return bytes; }
-uint64_t staging_storage_bytes(uint64_t bytes) { return bytes; }
-bool staging_has_space(const StagingSizes&) { return true; }
-void split_staging_batch() {}
-
-template <>
-gx::DrawData* get_last_draw_command() {
-  return nullptr;
-}
-template <>
-void push_draw_command(gx::DrawData) {}
-template <>
-PipelineRef pipeline_ref(const gx::PipelineConfig&) {
-  return 0;
-}
-
-template <>
-PipelineRef pipeline_ref(const clear::PipelineConfig& config) {
-  return (config.clearColor ? 1u : 0u) | (config.clearAlpha ? 2u : 0u) | (config.clearDepth ? 4u : 0u);
-}
-
-template <>
-void push_draw_command(clear::DrawData data) {
-  const auto size = get_render_target_size();
-  const ClipRect rect = data.useScissor ? data.scissor
-                                        : ClipRect{0, 0, static_cast<int32_t>(size.x), static_cast<int32_t>(size.y)};
-  rsx::clear_rect(rect, (data.pipeline & 1u) != 0, (data.pipeline & 2u) != 0, (data.pipeline & 4u) != 0,
-                  {static_cast<float>(data.color.r), static_cast<float>(data.color.g),
-                   static_cast<float>(data.color.b), static_cast<float>(data.color.a)},
-                  data.depth);
-  rsx::apply_viewport_scissor();
-}
+// Draws execute in order on the RSX before the FIFO reaches the sync token.
+bool queue_draw_sync(uint16_t, void (*)(uint16_t)) { return false; }
 
 namespace tex_copy_conv {
 bool needs_conversion(GXTexFmt fmt) {
@@ -342,9 +309,12 @@ bool needs_conversion(GXTexFmt fmt) {
 } // namespace tex_copy_conv
 
 namespace texture_replacement {
-void register_tlut(const GXTlutObj*, const void*, GXTlutFmt, uint16_t) noexcept {}
-void load_tlut(const GXTlutObj*, uint32_t) noexcept {}
-std::optional<TextureHandle> find_replacement(const GXTexObj_&) noexcept { return std::nullopt; }
+StreamingStats process_streaming() noexcept { return {}; }
+std::optional<ReplacementResult> find_pointer_replacement(const GXTexObj_&) noexcept { return std::nullopt; }
+std::optional<ReplacementResult> find_source_replacement(const GXTexObj_&, const texture::TextureSourceKey&) noexcept {
+  return std::nullopt;
+}
+bool should_build_source_key() noexcept { return false; }
 } // namespace texture_replacement
 
 namespace efb_ram {

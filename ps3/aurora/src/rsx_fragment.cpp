@@ -296,6 +296,24 @@ void emit_regular(Assembler& as, const std::string& dst, GXTevOp op, GXTevBias b
   }
 }
 
+// populate_pipeline_config already maps out-of-range texcoords to TEXCOORD0, or to NULL without texgens.
+struct TexDependency {
+  int texCoordId = -1;
+  int texMapId = -1;
+  bool canSampleTexture = false;
+};
+TexDependency stage_texture(const gx::TevStage& stage) {
+  TexDependency dep;
+  if (stage.texCoordId != GX_TEXCOORD_NULL && underlying(stage.texCoordId) < gx::MaxTexCoord) {
+    dep.texCoordId = static_cast<int>(underlying(stage.texCoordId));
+  }
+  if (stage.texMapId != GX_TEXMAP_NULL && stage.texMapId < gx::MaxTextures) {
+    dep.texMapId = static_cast<int>(underlying(stage.texMapId));
+  }
+  dep.canSampleTexture = dep.texCoordId >= 0 && dep.texMapId >= 0;
+  return dep;
+}
+
 std::string build_tev_program(const gx::ShaderConfig& config) {
   Assembler as;
   as.text = "!!FP2.0\n";
@@ -312,7 +330,7 @@ std::string build_tev_program(const gx::ShaderConfig& config) {
     const bool needsKonst = uses_color_arg(stage, GX_CC_KONST, GX_CC_KONST) || uses_alpha_arg(stage, GX_CA_KONST);
 
     if (needsTex) {
-      const auto dep = gx::tev_stage_texture_dependency(config, idx);
+      const auto dep = stage_texture(stage);
       if (dep.canSampleTexture) {
         as.text += "TXP R5, f[TEX" + std::to_string(dep.texCoordId) + "], texture[" + std::to_string(dep.texMapId) +
                    "], 2D;\n";
@@ -321,7 +339,7 @@ std::string build_tev_program(const gx::ShaderConfig& config) {
           as.op("MOV", "R5", {temp(5, swz)});
         }
       } else {
-        as.op("MOV", "R5", {config.numTexGens == 0 ? zero() : one()});
+        as.op("MOV", "R5", {stage.texCoordId == GX_TEXCOORD_NULL ? zero() : one()});
       }
     }
     if (needsRas) {
@@ -619,7 +637,7 @@ const FragmentProgram* gx_fragment_program(const gx::ShaderConfig& config) noexc
   if (!entry) {
     entry = assemble(build_tev_program(config));
     for (u32 i = 0; i < config.tevStageCount; ++i) {
-      const auto dep = gx::tev_stage_texture_dependency(config, i);
+      const auto dep = stage_texture(config.tevStages[i]);
       if (dep.canSampleTexture) {
         entry->textureMask |= 1u << dep.texMapId;
       }
@@ -670,9 +688,9 @@ void bind_fragment_program(const FragmentProgram* constProgram, const Vec4<float
     }
     program->lastGeneration = stream_generation();
     program->lastOffset = stream.offset;
-    rsxLoadFragmentProgramLocation(g_ctx, &program->header, stream.offset, GCM_LOCATION_CELL);
+    rsxLoadFragmentProgramLocation(g_ctx, &program->header, stream.offset, GCM_LOCATION_RSX);
   } else if (g_boundProgram != program) {
-    rsxLoadFragmentProgramLocation(g_ctx, &program->header, program->lastOffset, GCM_LOCATION_CELL);
+    rsxLoadFragmentProgramLocation(g_ctx, &program->header, program->lastOffset, GCM_LOCATION_RSX);
   }
   g_boundProgram = program;
 }

@@ -44,7 +44,7 @@ endif()
 get_filename_component(MKW_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(MKW_PS3_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set(MKW_RUNTIME_DIR "${MKW_ROOT}/runtime")
-set(MKW_AURORA_DIR "${MKW_ROOT}/aurora-main")
+set(MKW_AURORA_DIR "${MKW_ROOT}/aurora-main" CACHE PATH "aurora checkout with ps3/patches/aurora.patch applied")
 
 set(MKW_GENERATED_ROOT "${MKW_ROOT}" CACHE PATH
     "Directory containing the translator's generated/ output tree")
@@ -108,6 +108,9 @@ target_compile_options(mkw_ps3_flags INTERFACE
     "$<$<COMPILE_LANGUAGE:C,CXX>:-include${MKW_PS3_DIR}/compat/include/ps3_prelude.h>"
     $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++20>
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
+    # One TOC slot per object: the full game overflows the 64 KiB TOC otherwise, and the
+    # multi-TOC layout ld falls back to leaves libgcc's unwinder with a bad TOC base.
+    -mminimal-toc
     -w)
 target_link_directories(mkw_ps3_flags INTERFACE "${PSL1GHT}/ppu/lib" "${PS3DEV}/portlibs/ppu/lib")
 
@@ -148,7 +151,14 @@ target_compile_options(mkw_cryptopp PRIVATE -O2)
 # ---------------------------------------------------------------------------
 set(MKW_AURORA_SHARED_SOURCES
     lib/logging.cpp
-    lib/input.cpp
+    lib/gamepad.cpp
+    lib/io.cpp
+    lib/input/binding.cpp
+    lib/input/capture.cpp
+    lib/input/router.cpp
+    lib/input/sdl_input.cpp
+    lib/input/source_state.cpp
+    lib/dolphin/pad/adapter.cpp
     lib/dolphin/pad/pad.cpp
     lib/dolphin/si/si.cpp
     lib/dolphin/vi/vi.cpp
@@ -165,6 +175,7 @@ set(MKW_AURORA_SHARED_SOURCES
     lib/dolphin/gx/GXGet.cpp
     lib/dolphin/gx/GXLighting.cpp
     lib/dolphin/gx/GXManage.cpp
+    lib/dolphin/gx/GXPerf.cpp
     lib/dolphin/gx/GXPixel.cpp
     lib/dolphin/gx/GXTev.cpp
     lib/dolphin/gx/GXTexture.cpp
@@ -177,10 +188,15 @@ set(MKW_AURORA_SHARED_SOURCES
     lib/dolphin/mtx/vec.c
     lib/dolphin/mtx/quat.c
     lib/gfx/texture_convert.cpp
+    lib/gfx/texture_format.cpp
+    lib/gx/attr_fmt.cpp
     lib/gx/command_processor.cpp
+    lib/gx/dl.cpp
     lib/gx/fifo.cpp
     lib/gx/gx.cpp
-    lib/gx/shader_info.cpp)
+    lib/gx/regs.cpp
+    lib/gx/shader_info.cpp
+    lib/gx/texture.cpp)
 list(TRANSFORM MKW_AURORA_SHARED_SOURCES PREPEND "${MKW_AURORA_DIR}/")
 file(GLOB MKW_AURORA_PS3_SOURCES CONFIGURE_DEPENDS "${MKW_PS3_DIR}/aurora/src/*.cpp")
 file(GLOB MKW_CGCOMP_SOURCES CONFIGURE_DEPENDS "${MKW_PS3_DIR}/third_party/cgcomp/source/*.cpp")
@@ -199,7 +215,7 @@ target_compile_options(mkw_aurora PRIVATE -O2)
 # ---------------------------------------------------------------------------
 file(GLOB_RECURSE MKW_RUNTIME_SOURCES CONFIGURE_DEPENDS "${MKW_RUNTIME_DIR}/src/*.cpp")
 list(FILTER MKW_RUNTIME_SOURCES EXCLUDE REGEX
-    "/(guest_flat_memory|guest_flat_memory_macos|external_audio_macos|host_cpu_baseline|settings_overlay|controller_mapping_wizard|discord_presence)\\.cpp$")
+    "/(guest_flat_memory|guest_flat_memory_macos|external_audio_macos|host_cpu_baseline|settings_overlay|controller_mapping_wizard|discord_presence|steam_input_layout|wiimote_host|wiimote_platform_unix|wiimote_platform_windows)\\.cpp$")
 list(FILTER MKW_RUNTIME_SOURCES EXCLUDE REGEX "/product/")
 file(GLOB MKW_PS3_RUNTIME_SOURCES CONFIGURE_DEPENDS "${MKW_PS3_DIR}/runtime/*.cpp")
 
@@ -225,7 +241,9 @@ target_include_directories(mkw_runtime_includes INTERFACE
 target_compile_definitions(mkw_runtime_includes INTERFACE
     SDL_MAIN_HANDLED CRYPTOPP_DISABLE_ASM CRYPTOPP_NO_GLOBAL_BYTE)
 
-add_library(mkw_runtime STATIC ${MKW_RUNTIME_SOURCES} ${MKW_PS3_RUNTIME_SOURCES})
+# OBJECT, as on desktop: HLE overrides register themselves from static initializers in objects
+# nothing else references, which an archive would silently drop.
+add_library(mkw_runtime OBJECT ${MKW_RUNTIME_SOURCES} ${MKW_PS3_RUNTIME_SOURCES})
 target_link_libraries(mkw_runtime PUBLIC mkw_ps3_flags mkw_runtime_includes mkw_aurora)
 target_compile_options(mkw_runtime PRIVATE -O2)
 
@@ -235,7 +253,7 @@ target_compile_options(mkw_runtime PRIVATE -O2)
 include("${MKW_GENERATED_ROOT}/generated/build_shards/shards.cmake")
 
 set(MKW_TRANSLATED_EXTRA_SOURCES)
-foreach(candidate data_sections_init.cpp guest_symbol_table.cpp data_sections_init_blobs.S)
+foreach(candidate guest_symbol_table.cpp)
     if(EXISTS "${MKW_GENERATED_ROOT}/generated/${candidate}")
         list(APPEND MKW_TRANSLATED_EXTRA_SOURCES "${MKW_GENERATED_ROOT}/generated/${candidate}")
     endif()
@@ -243,13 +261,31 @@ endforeach()
 if(NOT EXISTS "${MKW_GENERATED_ROOT}/generated/guest_symbol_table.cpp")
     list(APPEND MKW_TRANSLATED_EXTRA_SOURCES "${MKW_RUNTIME_DIR}/cmake/guest_symbol_table_stub.cpp")
 endif()
-set_source_files_properties("${MKW_GENERATED_ROOT}/generated/data_sections_init_blobs.S"
-    PROPERTIES LANGUAGE ASM)
+# The guest DOL/REL images are only copied into guest RAM once at boot, so ship them as files
+# (read by ps3/runtime/data_sections_ps3.cpp) instead of keeping ~7.7 MiB resident in the EBOOT.
+set(MKW_DATA_SECTIONS_DIR "${CMAKE_BINARY_DIR}/pkg/USRDIR/data_sections")
+file(STRINGS "${MKW_GENERATED_ROOT}/generated/data_sections_init_blobs.S" _mkw_blob_lines
+     REGEX "^// (DOL|REL): |^\\.incbin ")
+set(_mkw_manifest "")
+foreach(_line IN LISTS _mkw_blob_lines)
+    if(_line MATCHES "^// (DOL|REL): [^ ]+ @ (0x[0-9A-Fa-f]+) \\(([0-9]+) bytes\\)")
+        set(_mkw_blob_info "${CMAKE_MATCH_2} ${CMAKE_MATCH_3}")
+    elseif(_line MATCHES "^\\.incbin \"(.*)\"")
+        get_filename_component(_mkw_blob_name "${CMAKE_MATCH_1}" NAME)
+        file(COPY "${CMAKE_MATCH_1}" DESTINATION "${MKW_DATA_SECTIONS_DIR}")
+        string(APPEND _mkw_manifest "${_mkw_blob_info} ${_mkw_blob_name}\n")
+    endif()
+endforeach()
+file(WRITE "${MKW_DATA_SECTIONS_DIR}/manifest.txt" "${_mkw_manifest}")
+# Runtime glue that depends on generated/ headers and the translated guest region.
+file(GLOB MKW_GAME_GLUE_SOURCES CONFIGURE_DEPENDS "${MKW_RUNTIME_DIR}/game/*.cpp")
+list(APPEND MKW_TRANSLATED_EXTRA_SOURCES ${MKW_GAME_GLUE_SOURCES})
 
 add_library(mkw_translated STATIC
     ${MKW_BASE_COMMON_SHARDS} ${MKW_BASE_PORTABLE_SENSITIVE_SHARDS} ${MKW_TRANSLATED_EXTRA_SOURCES})
 target_link_libraries(mkw_translated PRIVATE mkw_ps3_flags mkw_runtime_includes mkw_aurora)
 target_compile_options(mkw_translated PRIVATE -O2 ${MKW_TRANSLATED_FP_OPTIONS})
+target_compile_definitions(mkw_translated PRIVATE MKW_TRANSLATED_GUEST_REGION=${MKW_TRANSLATED_GUEST_REGION})
 
 # ---------------------------------------------------------------------------
 # Executable and PS3 packaging
@@ -258,6 +294,7 @@ option(MKW_PS3_SYNTHETIC "Build the synthetic pipeline test (stubs untranslated 
 set(MKW_PS3_EXE_EXTRA_SOURCES
     # libstdc++ is linked after every archive, so its POSIX dependencies must be plain objects.
     "${MKW_PS3_DIR}/compat/src/posix_stubs.c"
+    "${MKW_PS3_DIR}/compat/src/newlib_lock_fix.c"
     "${MKW_PS3_DIR}/platform/ps3_process.cpp")
 if(MKW_PS3_SYNTHETIC)
     list(APPEND MKW_PS3_EXE_EXTRA_SOURCES "${MKW_PS3_DIR}/tests/synthetic/guest_stubs.cpp")
@@ -268,6 +305,8 @@ add_executable(wiicompiled_ps3
     ${MKW_PS3_EXE_EXTRA_SOURCES})
 set_target_properties(wiicompiled_ps3 PROPERTIES OUTPUT_NAME "wiicompiled" SUFFIX ".elf")
 target_compile_options(wiicompiled_ps3 PRIVATE -O2 ${MKW_TRANSLATED_FP_OPTIONS})
+# libstdc++'s iostream init runs before PSL1GHT's libc init; see newlib_lock_fix.c.
+target_link_options(wiicompiled_ps3 PRIVATE -Wl,--wrap=__libc_auto_lock_allocate -Wl,--wrap=rename)
 target_link_libraries(wiicompiled_ps3 PRIVATE
     -Wl,--start-group
     mkw_translated mkw_runtime mkw_aurora mkw_cryptopp mkw_pugixml mkw_libco mkw_xxhash mkw_ps3_compat

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -68,7 +69,7 @@ void MarkDspInitialized() {
 void ResetDspTaskGlobals() {
     Memory::TryWrite32(kDspAssertPendingAddr, 0);
     Memory::TryWrite32(kDspAssertTaskAddr, 0);
-    Memory::TryWrite32(0x80386618u, 0);
+    Memory::TryWrite32(MKW_GADDR(80386618), 0);
     Memory::TryWrite32(kDspCurrentTaskAddr, 0);
     Memory::TryWrite32(kDspFirstTaskAddr, 0);
     Memory::TryWrite32(kDspRunningTaskAddr, 0);
@@ -133,7 +134,7 @@ struct AramAliases {
 
 AramAliases AramAliasesFor(uint32_t addr) {
     if (addr & 0x10000000u) {
-        const uint32_t exramOffset = addr & static_cast<uint32_t>(Memory::kMem2Size - 1u);
+        const uint32_t exramOffset = addr & static_cast<uint32_t>(std::bit_ceil(Memory::kMem2Size) - 1u);
         return {0x10000000u | exramOffset, 0x90000000u | exramOffset};
     }
     const uint32_t ramOffset = addr & 0x01ffffffu;

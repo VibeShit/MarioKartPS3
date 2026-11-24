@@ -133,9 +133,9 @@ inline const uint8_t* attr_source(const gx::AttrConfig& mapping, int attr, const
   }
   uint32_t index;
   if (mapping.attrType == GX_INDEX8) {
-    index = p[mapping.nrmIndexCount == 3 ? group : 0];
+    index = p[mapping.nbt3 ? group : 0];
   } else {
-    index = load16(p + (mapping.nrmIndexCount == 3 ? group * 2 : 0), false);
+    index = load16(p + (mapping.nbt3 ? group * 2 : 0), false);
   }
   le = mapping.le;
   const size_t offset = static_cast<size_t>(index) * mapping.stride;
@@ -152,7 +152,7 @@ void decode_vertex(const gx::ShaderConfig& config, const uint8_t* vtx, DecodedVe
       continue;
     }
     bool le = false;
-    if (attr == GX_VA_NRM && mapping.cnt == 9 && mapping.nrmIndexCount == 3 && mapping.attrType != GX_DIRECT) {
+    if (attr == GX_VA_NRM && mapping.cnt == 9 && mapping.nbt3 && mapping.attrType != GX_DIRECT) {
       Vec3f* groups[3] = {&out.nrm, &out.binormal, &out.tangent};
       for (uint32_t g = 0; g < 3; ++g) {
         const uint8_t* p = attr_source(mapping, attr, vtx, g, le);
@@ -234,6 +234,53 @@ inline Vec3f normalize(const Vec3f& v) {
   return {v.x * inv, v.y * inv, v.z * inv};
 }
 
+// GX supplies an opaque white color when a draw omits vertex colors; a lone CLR1 feeds channel 0.
+int vertex_color_attr(const gx::ShaderConfig& config, uint32_t channel) {
+  const bool hasColor0 = config.attrs[GX_VA_CLR0].attrType != GX_NONE;
+  const bool hasColor1 = config.attrs[GX_VA_CLR1].attrType != GX_NONE;
+  if (channel == 0 && (hasColor0 || hasColor1)) {
+    return hasColor0 ? GX_VA_CLR0 : GX_VA_CLR1;
+  }
+  if (channel == 1 && hasColor0 && hasColor1) {
+    return GX_VA_CLR1;
+  }
+  return -1;
+}
+
+float sanitize_light_dir_component(float value) {
+  uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  if ((bits & 0x7f800000u) != 0x7f800000u) {
+    return value;
+  }
+  if ((bits & 0x007fffffu) != 0) {
+    return 0.f;
+  }
+  return (bits & 0x80000000u) != 0 ? -1.f : 1.f;
+}
+
+// Mirrors prepare_shader_light in aurora's shader_info.cpp.
+gx::Light prepare_light(gx::Light light) {
+  if (std::fabs(light.distAtt[0]) < 0.00001f && std::fabs(light.distAtt[1]) < 0.00001f &&
+      std::fabs(light.distAtt[2]) < 0.00001f) {
+    light.distAtt[0] = 0.00001f;
+  }
+  const double normSq = static_cast<double>(light.dir[0]) * light.dir[0] +
+                        static_cast<double>(light.dir[1]) * light.dir[1] +
+                        static_cast<double>(light.dir[2]) * light.dir[2];
+  if (normSq == 0.0) {
+    light.dir[0] = light.dir[1] = light.dir[2] = 0.f;
+    return light;
+  }
+  const double invNorm = 1.0 / std::sqrt(normSq);
+  for (int i = 0; i < 3; ++i) {
+    light.dir[i] = sanitize_light_dir_component(static_cast<float>(light.dir[i] * invNorm));
+  }
+  return light;
+}
+
+std::array<gx::Light, GX::MaxLights> g_preparedLights;
+
 struct LightingInputs {
   Vec3f mvPos;
   Vec3f mvNrm;
@@ -244,7 +291,7 @@ void light_channel(const gx::ShaderConfig& config, uint32_t chan, bool alpha, co
                    const LightingInputs& in, std::array<float, 4>& out) {
   const auto& cc = config.colorChannels[alpha ? chan + GX_ALPHA0 : chan];
   const auto& state = g_gxState.colorChannelState[alpha ? chan + GX_ALPHA0 : chan];
-  const int vtxAttr = gx::shader_vertex_color_attr(config, chan);
+  const int vtxAttr = vertex_color_attr(config, chan);
   static constexpr std::array<float, 4> kWhite{1.f, 1.f, 1.f, 1.f};
   const auto& vtxColor = vtxAttr >= 0 ? v.color[vtxAttr - GX_VA_CLR0] : kWhite;
   const auto source = [&](GXColorSrc src, const Vec4<float>& reg) -> std::array<float, 4> {
@@ -270,7 +317,7 @@ void light_channel(const gx::ShaderConfig& config, uint32_t chan, bool alpha, co
   for (int c = first; c < last; ++c) {
     lighting[c] = static_cast<int>(std::round(amb[c] * 255.f));
   }
-  const auto& lights = g_gxState.preparedLights;
+  const auto& lights = g_preparedLights;
   for (uint32_t i = 0; i < GX::MaxLights; ++i) {
     if (!state.lightMask.test(i)) {
       continue;
@@ -367,10 +414,11 @@ std::array<float, 4> texgen(const gx::ShaderConfig& config, uint32_t i, const De
       out.z = 1.f;
     }
   }
-  if (config.dualTexEnabled && tcg.normalize) {
+  // populate_pipeline_config already drops normalize/postMtx when XF dual-tex is off.
+  if (tcg.normalize) {
     out = normalize(out);
   }
-  if (config.dualTexEnabled && tcg.postMtx != GX_PTIDENTITY) {
+  if (tcg.postMtx != GX_PTIDENTITY) {
     const uint32_t post = (static_cast<uint32_t>(tcg.postMtx) - GX_PTTEXMTX0) / 3u;
     out = mul3x4(g_gxState.ptTexMtxs[std::min<uint32_t>(post, gx::MaxPTTexMtx - 1)], out.x, out.y, out.z, 1.f);
   }
@@ -536,15 +584,15 @@ void bind_attributes(uint32_t offset, uint32_t strideBytes, uint32_t texCount) {
   static constexpr uint32_t kOffsets[] = {kOffPos, kOffColor0, kOffColor1, kOffFog};
   for (int i = 0; i < 4; ++i) {
     rsxBindVertexArrayAttrib(g_ctx, kAttribs[i], 0, offset + kOffsets[i] * 4, strideBytes, kElems[i],
-                             GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_CELL);
+                             GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
   }
   for (uint32_t t = 0; t < 8; ++t) {
     if (t < texCount) {
       rsxBindVertexArrayAttrib(g_ctx, GCM_VERTEX_ATTRIB_TEX0 + t, 0, offset + (kOffTex + t * 4) * 4, strideBytes, 4,
-                               GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_CELL);
+                               GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
     } else if ((g_state.attribMask & (1u << t)) != 0) {
       rsxBindVertexArrayAttrib(g_ctx, GCM_VERTEX_ATTRIB_TEX0 + t, 0, 0, 0, 0, GCM_VERTEX_DATA_TYPE_F32,
-                               GCM_LOCATION_CELL);
+                               GCM_LOCATION_RSX);
     }
   }
   g_state.attribMask = (1u << texCount) - 1u;
@@ -574,15 +622,14 @@ void draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxC
 
   const auto info = gx::build_shader_info(sc);
   gx::resolve_sampled_textures(info);
-  if (info.lightingEnabled && g_gxState.preparedLightsDirty) {
-    for (size_t i = 0; i < g_gxState.preparedLights.size(); ++i) {
-      g_gxState.preparedLights[i] = gx::prepare_shader_light(g_gxState.lights[i]);
+  if (info.lightingEnabled) {
+    for (size_t i = 0; i < g_preparedLights.size(); ++i) {
+      g_preparedLights[i] = prepare_light(g_gxState.lights[i]);
     }
-    g_gxState.preparedLightsDirty = false;
   }
 
   // ---- Vertex processing ----
-  const uint32_t texCount = std::min<uint32_t>(sc.numTexGens, gx::MaxTexCoord);
+  const uint32_t texCount = std::min<uint32_t>(g_gxState.numTexGens, gx::MaxTexCoord);
   const uint32_t strideFloats = kOffTex + texCount * 4;
   const uint32_t strideBytes = strideFloats * 4;
   const Stream vtxStream = stream_alloc(strideBytes * vtxCount, 128);
@@ -632,15 +679,9 @@ void draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxC
 
     float fogValue = 0.f;
     if (fogEnabled && cw != 0.f) {
+      // Mirrors aurora's fragment fog: a / (b - z) (perspective) or a * z (orthographic), window z.
       const float depth = std::clamp(zFar + (cz / cw) * (zFar - zNear), 0.f, 1.f);
-      const float zCoord = std::round(depth * 16777216.f);
-      float ze;
-      if ((fog.type & 8) == 0) {
-        const float shifted = std::floor(zCoord / static_cast<float>(1u << std::min<uint32_t>(fog.bShift, 31)));
-        ze = (fog.aRaw * 16777216.f) / (static_cast<float>(fog.bMagnitude) - shifted);
-      } else {
-        ze = fog.aRaw * zCoord / 16777216.f;
-      }
+      const float ze = (fog.type & 8) == 0 ? fog.a / (fog.b - depth) : fog.a * depth;
       fogValue = ze - fog.c;
     }
     o[kOffFog] = fogValue;
@@ -723,7 +764,7 @@ void draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxC
   }
 
   // ---- Fixed-function state ----
-  const bool hasAlpha = gx::render_target_has_alpha(config.pixelFmt);
+  const bool hasAlpha = g_gxState.pixelFmt == GX_PF_RGBA6_Z24;
   uint32_t blendEnable = 0;
   uint32_t src = GCM_ONE, dst = GCM_ZERO, srcA = GCM_ONE, dstA = GCM_ZERO, eq = GCM_FUNC_ADD;
   uint32_t logicEnable = 0;
@@ -801,12 +842,11 @@ void draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxC
   // ---- Draw ----
   bind_attributes(vtxStream.offset, strideBytes, texCount);
   if (isTriangles) {
-    rsxDrawIndexArray(g_ctx, GCM_TYPE_TRIANGLES, idxStream.offset, indexCount, GCM_INDEX_TYPE_16B, GCM_LOCATION_CELL);
+    rsxDrawIndexArray(g_ctx, GCM_TYPE_TRIANGLES, idxStream.offset, indexCount, GCM_INDEX_TYPE_16B, GCM_LOCATION_RSX);
   } else {
     rsxDrawVertexArray(g_ctx, gcmType, 0, vtxCount);
   }
   (void)gcmType;
-  g_gxState.stateDirty = false;
 }
 
 void prepare_clear() noexcept {

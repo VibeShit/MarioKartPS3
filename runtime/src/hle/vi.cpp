@@ -8,6 +8,7 @@
 #include "fiber_manager.h"
 #include "platform/host_platform.h"
 #include "runtime_log.h"
+#include "perf_stats.h"
 
 #include <dolphin/vi.h>
 
@@ -133,22 +134,22 @@ ViState g_vi;
 
 
 // Guest-side state addresses used by the SDK's VI globals.
-constexpr uint32_t kViInitializedFlagAddr   = 0x80386b38;
-constexpr uint32_t kViTvFormatAddr          = 0x80386ba8;
-constexpr uint32_t kViRenderWidthAddr       = 0x80350864;
-constexpr uint32_t kViRenderHeightAddr      = 0x80350866;
-constexpr uint32_t kViXfbWidthAddr          = 0x80350872;
-constexpr uint32_t kViXfbHeightAddr         = 0x8035087c;
-constexpr uint32_t kViRetraceCountAddr      = 0x80386be4; // matches VIWaitForRetrace/handler
-constexpr uint32_t kViTimingGuardAddr       = 0x80386b44;
-constexpr uint32_t kViPreRetraceCallback    = 0x80386bb8;
-constexpr uint32_t kViPostRetraceCallback   = 0x80386bb4;
-constexpr uint32_t kViNextFrameBufferAddr   = 0x80386ba0;
-constexpr uint32_t kViNextFrameBufferHwAddr = 0x80350890;
-constexpr uint32_t kViRetraceQueueAddr      = 0x80386bc0; // Thread queue for VIWaitForRetrace
+const uint32_t kViInitializedFlagAddr   = MKW_GADDR(80386b38);
+const uint32_t kViTvFormatAddr          = MKW_GADDR(80386ba8);
+const uint32_t kViRenderWidthAddr       = MKW_GADDR(80350864);
+const uint32_t kViRenderHeightAddr      = MKW_GADDR(80350866);
+const uint32_t kViXfbWidthAddr          = MKW_GADDR(80350872);
+const uint32_t kViXfbHeightAddr         = MKW_GADDR(8035087c);
+const uint32_t kViRetraceCountAddr      = MKW_GADDR(80386be4); // matches VIWaitForRetrace/handler
+const uint32_t kViTimingGuardAddr       = MKW_GADDR(80386b44);
+const uint32_t kViPreRetraceCallback    = MKW_GADDR(80386bb8);
+const uint32_t kViPostRetraceCallback   = MKW_GADDR(80386bb4);
+const uint32_t kViNextFrameBufferAddr   = MKW_GADDR(80386ba0);
+const uint32_t kViNextFrameBufferHwAddr = MKW_GADDR(80350890);
+const uint32_t kViRetraceQueueAddr      = MKW_GADDR(80386bc0); // Thread queue for VIWaitForRetrace
 
 // EGG::BaseSystem::sSystem pointer - must be non-null before post-retrace callback is valid
-constexpr uint32_t kEggSSystemAddr = 0x80386F60;
+const uint32_t kEggSSystemAddr = MKW_GADDR(80386F60);
 
 std::chrono::microseconds IntervalForFormat(uint32_t tvFormat) {
     // NTSC-ish defaults to 60 Hz; PAL uses 50 Hz.
@@ -161,6 +162,7 @@ constexpr std::chrono::microseconds kFinalSpinWindow{500};
 
 void SleepPreciselyUntil(Clock::time_point deadline, bool finishWithSpin = false,
                          std::chrono::microseconds spinWindow = 750us) {
+    PerfStats::WaitScope wait;
     const auto now = Clock::now();
     if (now >= deadline) {
         return;
@@ -515,6 +517,10 @@ void PaceToRetraceBoundary(Clock::time_point deadline) {
 // Single owner of the Aurora frame presentation sequence: seals the active frame, optionally paces the
 // producer to the VI retrace boundary, and pre-warms the next frame. Paced from GXCopyDisp; unpaced for
 // the retrace-context black/boot present path in AdvanceRetrace.
+#if defined(__PPU__)
+extern "C" void aurora_ps3_set_present_black(bool black);
+#endif
+
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
@@ -577,13 +583,21 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         aurora_set_present_schedule(0, 0);
     }
 
-    aurora_end_frame();
+#if defined(__PPU__)
+    {
+        // Frames rendered while the VI is blanked must not reach the screen.
+        std::lock_guard<std::mutex> lock(g_viMutex);
+        aurora_ps3_set_present_black(g_vi.black);
+    }
+#endif
+    EndAuroraFrame();
     if (paceThisFrame) {
         PaceToRetraceBoundary(paceDeadline);
         std::lock_guard<std::mutex> lock(g_viMutex);
         s_lastPacedRetraceCount = g_vi.retraceCount;
     }
     settings_overlay::AdvancePresentedFrame();
+    PerfStats::OnFramePresented();
     g_auroraFrameActive.store(false, std::memory_order_release);
     g_auroraFrameHadWork.store(false, std::memory_order_release);
     if (presentedXfb) {
@@ -751,7 +765,10 @@ extern "C" void VIConfigure_HLE_801b9f6c(CpuContext* ctx)
             renderMode.xfbHeight != 0 ? renderMode.xfbHeight : renderMode.efbHeight;
     }
 
-    ::VIConfigure(&renderMode);
+    {
+        GX_SYNC_INLINE();
+        ::VIConfigure(&renderMode);
+    }
 
     ViSetR3(ctx, 0);
 }
@@ -831,6 +848,9 @@ extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
         EnsureInitializedLocked();
         // Write to PENDING state - will be committed on next retrace after VIFlush
         g_vi.pendingBlack = makeBlack;
+        // EGG flushes from its GX draw-done callback, which the HLE never fires, so a pending
+        // unblank would wait for an unrelated VIFlush (seconds at boot). Apply it right away.
+        g_vi.black = makeBlack;
     }
     ViSetR3(ctx, 0);
 }

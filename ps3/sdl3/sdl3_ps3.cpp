@@ -171,6 +171,7 @@ void PollPads() {
         if (ioPadGetData(port, &data) != 0 || data.len == 0)
             continue;  // No new report: keep the previous state.
 
+        const PadState before = pad;
         auto& b = pad.buttons;
         b[SDL_GAMEPAD_BUTTON_SOUTH] = data.BTN_CROSS;
         b[SDL_GAMEPAD_BUTTON_EAST] = data.BTN_CIRCLE;
@@ -205,6 +206,30 @@ void PollPads() {
             pad.accel[0] = (static_cast<float>(data.SENSOR_X) - 512.0f) / kCountsPerG * SDL_STANDARD_GRAVITY;
             pad.accel[1] = -(static_cast<float>(data.SENSOR_Y) - 512.0f) / kCountsPerG * SDL_STANDARD_GRAVITY;
             pad.accel[2] = (static_cast<float>(data.SENSOR_Z) - 512.0f) / kCountsPerG * SDL_STANDARD_GRAVITY;
+        }
+
+        // aurora's pad layer is driven by these events, not by polling.
+        for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
+            if (b[i] == before.buttons[i])
+                continue;
+            SDL_Event event{};
+            event.type = b[i] ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+            event.gbutton.timestamp = SDL_GetTicksNS();
+            event.gbutton.which = PortToId(port);
+            event.gbutton.button = static_cast<Uint8>(i);
+            event.gbutton.down = b[i];
+            PushEventLocked(event);
+        }
+        for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; ++i) {
+            if (a[i] == before.axes[i])
+                continue;
+            SDL_Event event{};
+            event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+            event.gaxis.timestamp = SDL_GetTicksNS();
+            event.gaxis.which = PortToId(port);
+            event.gaxis.axis = static_cast<Uint8>(i);
+            event.gaxis.value = a[i];
+            PushEventLocked(event);
         }
     }
 }
@@ -329,6 +354,13 @@ bool SDL_ClearError(void) {
 
 // ---- init -----------------------------------------------------------------
 static SDL_InitFlags g_initFlags = 0;
+static sys_ppu_thread_t g_mainThread = 0;
+static const bool g_mainThreadCaptured = [] { return sysThreadGetId(&g_mainThread) == 0; }();
+bool SDL_IsMainThread(void) {
+    sys_ppu_thread_t self = 0;
+    sysThreadGetId(&self);
+    return self == g_mainThread;
+}
 bool SDL_Init(SDL_InitFlags flags) { return SDL_InitSubSystem(flags); }
 bool SDL_InitSubSystem(SDL_InitFlags flags) {
     if (flags & (SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD | SDL_INIT_SENSOR | SDL_INIT_HAPTIC))
@@ -499,6 +531,9 @@ SDL_Gamepad* SDL_GetGamepadFromPlayerIndex(int playerIndex) {
 SDL_JoystickID SDL_GetGamepadID(SDL_Gamepad* gamepad) { return gamepad ? PortToId(gamepad->port) : 0; }
 SDL_Joystick* SDL_GetGamepadJoystick(SDL_Gamepad* gamepad) { return gamepad ? &gamepad->joystick : nullptr; }
 const char* SDL_GetGamepadName(SDL_Gamepad*) { return "PS3 Controller"; }
+const char* SDL_GetGamepadNameForID(SDL_JoystickID) { return "PS3 Controller"; }
+const char* SDL_GetGamepadPath(SDL_Gamepad*) { return nullptr; }
+int SDL_GetGamepadPlayerIndexForID(SDL_JoystickID id) { return SDL_GetGamepadPlayerIndex(SDL_GetGamepadFromID(id)); }
 SDL_GamepadType SDL_GetGamepadType(SDL_Gamepad*) { return SDL_GAMEPAD_TYPE_PS3; }
 Uint16 SDL_GetGamepadVendor(SDL_Gamepad*) { return 0x054c; }
 Uint16 SDL_GetGamepadProduct(SDL_Gamepad*) { return 0x0268; }
@@ -584,6 +619,8 @@ SDL_MouseButtonFlags SDL_GetMouseState(float* x, float* y) {
     return 0;
 }
 bool SDL_ShowCursor(void) { return true; }
+SDL_Keymod SDL_GetModState(void) { return SDL_KMOD_NONE; }
+bool SDL_SetWindowRelativeMouseMode(SDL_Window*, bool) { return false; }
 bool SDL_HideCursor(void) { return true; }
 
 // ---- events ---------------------------------------------------------------
@@ -764,6 +801,11 @@ bool SDL_CloseIO(SDL_IOStream* context) {
     delete context;
     return ok;
 }
+SDL_IOStatus SDL_GetIOStatus(SDL_IOStream* context) {
+    if (!context) return SDL_IO_STATUS_ERROR;
+    if (std::ferror(context->file)) return SDL_IO_STATUS_ERROR;
+    return std::feof(context->file) ? SDL_IO_STATUS_EOF : SDL_IO_STATUS_READY;
+}
 size_t SDL_ReadIO(SDL_IOStream* context, void* ptr, size_t size) {
     return context ? std::fread(ptr, 1, size, context->file) : 0;
 }
@@ -824,4 +866,35 @@ bool SDL_CreateDirectory(const char* path) {
 const char* SDL_GetBasePath(void) { return "/dev_hdd0/game/MKWR00001/USRDIR/"; }
 char* SDL_GetPrefPath(const char*, const char*) { return SDL_strdup("/dev_hdd0/game/MKWR00001/USRDIR/"); }
 
+}  // extern "C"
+
+// ---- clipboard / hidapi -------------------------------------------------------
+extern "C" {
+char* SDL_GetClipboardText(void) { return SDL_strdup(""); }
+bool SDL_RemovePath(const char* path) {
+    if (std::remove(path) == 0) return true;
+    return SDL_SetError("Couldn't remove %s", path);
+}
+bool SDL_RenamePath(const char* oldpath, const char* newpath) {
+    if (std::rename(oldpath, newpath) == 0) return true;
+    return SDL_SetError("Couldn't rename %s", oldpath);
+}
+Uint32 SDL_rand_bits(void) {
+    static Uint64 state = 0;
+    if (state == 0) state = SDL_GetPerformanceCounter() | 1;
+    state = state * 6364136223846793005ull + 1442695040888963407ull;
+    return static_cast<Uint32>(state >> 32);
+}
+int SDL_hid_init(void) {
+    SDL_SetError("HID is not available on the PS3");
+    return -1;
+}
+int SDL_hid_exit(void) { return 0; }
+Uint32 SDL_hid_device_change_count(void) { return 0; }
+SDL_hid_device_info* SDL_hid_enumerate(unsigned short, unsigned short) { return nullptr; }
+void SDL_hid_free_enumeration(SDL_hid_device_info*) {}
+SDL_hid_device* SDL_hid_open_path(const char*) { return nullptr; }
+int SDL_hid_write(SDL_hid_device*, const unsigned char*, size_t) { return -1; }
+int SDL_hid_read_timeout(SDL_hid_device*, unsigned char*, size_t, int) { return -1; }
+int SDL_hid_close(SDL_hid_device*) { return 0; }
 }  // extern "C"

@@ -1,0 +1,239 @@
+diff --git a/lib/gfx/texture.hpp b/lib/gfx/texture.hpp
+index 6343702..8aa570a 100644
+--- a/lib/gfx/texture.hpp
++++ b/lib/gfx/texture.hpp
+@@ -44,6 +44,13 @@ struct TextureRef {
+   u32 gxFormat;
+   bool hasArbitraryMips = false;
+   bool isReplacement = false;
++#ifdef AURORA_RSX
++  // A8R8G8B8 linear image in RSX local memory (mip 0 only); released after the GPU is done with it.
++  void* rsxMemory = nullptr;
++  u32 rsxOffset = 0;
++  u32 rsxPitch = 0;
++  ~TextureRef();
++#endif
+ 
+   TextureRef(wgpu::Texture texture, wgpu::TextureView sampleTextureView, wgpu::TextureView attachmentTextureView,
+              wgpu::Extent3D size, wgpu::TextureFormat format, uint32_t mipCount, u32 gxFormat)
+diff --git a/lib/gx/command_processor.cpp b/lib/gx/command_processor.cpp
+index 136ffb6..f65cf51 100644
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -20,6 +20,13 @@
+ #include <span>
+ #include <vector>
+ 
++#ifdef AURORA_RSX
++// PS3 backend entry point (ps3/aurora/src/rsx_draw.cpp).
++namespace aurora::rsx {
++void draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxCount, uint32_t vtxStride) noexcept;
++} // namespace aurora::rsx
++#endif
++
+ namespace aurora::gx::fifo {
+ namespace {
+ constexpr Module Log{"aurora::gx::fifo"};
+@@ -680,6 +687,15 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+     return;
+   }
+ 
++#ifdef AURORA_RSX
++  // The RSX backend renders immediately; no draw merging or staging.
++  {
++    const auto vertexData = reader.take(totalVtxBytes);
++    rsx::draw(prim, fmt, vertexData.data(), vtxCount, vtxSize);
++    return;
++  }
++#endif
++
+   const bool cleanState = g_gxState.dirty == 0 && fmt == sDrawCache.lastDrawFmt && sDrawCache.lineMode == 0 &&
+                           prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS;
+   auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
+@@ -968,6 +984,26 @@ void handle_aurora(ByteReader& reader) noexcept {
+     }
+     const u32 totalVtxBytes = vtxCount * vtxSize;
+     const auto vertexData = reader.take(totalVtxBytes);
++#ifdef AURORA_RSX
++    {
++      static std::vector<u8> expanded;
++      expanded.clear();
++      for (u32 i = 0; i < indexCount; ++i) {
++        u16 index;
++        std::memcpy(&index, indexData.data() + i * sizeof(u16), sizeof(index));
++        if (index < vtxCount) {
++          const u8* vtx = vertexData.data() + static_cast<size_t>(index) * vtxSize;
++          expanded.insert(expanded.end(), vtx, vtx + vtxSize);
++        }
++      }
++      const u32 count = static_cast<u32>(expanded.size() / vtxSize);
++      for (u32 first = 0; first < count; first += 0xFFFF / 3 * 3) {
++        const u32 n = std::min<u32>(count - first, 0xFFFF / 3 * 3);
++        rsx::draw(prim, fmt, expanded.data() + static_cast<size_t>(first) * vtxSize, static_cast<u16>(n), vtxSize);
++      }
++      return;
++    }
++#endif
+     const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
+     if (indexCount != 0) {
+       push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, indexCount);
+diff --git a/lib/gx/fifo.cpp b/lib/gx/fifo.cpp
+index d78a87f..466da65 100644
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -27,7 +27,13 @@ uint32_t sDlWritePos = 0;
+ 
+ namespace {
+ constexpr Module Log{"aurora::gx::fifo"};
++#ifdef AURORA_RSX
++// The RSX backend renders on the thread that drains the FIFO (the game thread), and the PS3
++// libstdc++ has no atomic wait/notify, so there is no worker.
++constexpr auto kProcessingMode = ProcessingMode::Drain;
++#else
+ constexpr auto kProcessingMode = ProcessingMode::Thread;
++#endif
+ constexpr uint32_t kDrawBatchSize = 1;
+ 
+ bool sFrameActive = false;
+@@ -58,7 +64,9 @@ void dispatch_draw_done() noexcept {
+ 
+ void wake_worker() noexcept {
+   sWorkerWake.fetch_add(1, std::memory_order_release);
++#ifndef AURORA_RSX
+   sWorkerWake.notify_all();
++#endif
+ }
+ 
+ void process_to(uint64_t target, std::memory_order order) noexcept {
+@@ -89,10 +97,13 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
+     }
+     processed += result.bytesProcessed;
+     sProcessed.store(processed, order);
++#ifndef AURORA_RSX
+     sProcessed.notify_all();
++#endif
+   }
+ }
+ 
++#ifndef AURORA_RSX
+ void worker_main(std::stop_token token) noexcept {
+   std::stop_callback wakeOnStop{token, wake_worker};
+   while (true) {
+@@ -129,6 +140,10 @@ void stop_worker() {
+   sWorkerThread.request_stop();
+   sWorkerThread.join();
+ }
++#else
++void start_worker() {}
++void stop_worker() {}
++#endif
+ } // namespace
+ 
+ ProcessingMode processing_mode() noexcept { return kProcessingMode; }
+@@ -275,6 +290,7 @@ void drain() {
+     process_to(target, std::memory_order_relaxed);
+     break;
+   case ProcessingMode::Thread: {
++#ifndef AURORA_RSX
+     sPublished.store(target, std::memory_order_release);
+     wake_worker();
+ 
+@@ -285,6 +301,7 @@ void drain() {
+         processed = sProcessed.load(std::memory_order_acquire);
+       } while (processed < target);
+     }
++#endif
+     break;
+   }
+   }
+diff --git a/lib/gx/gx.cpp b/lib/gx/gx.cpp
+index c9227b6..afe4f6e 100644
+--- a/lib/gx/gx.cpp
++++ b/lib/gx/gx.cpp
+@@ -55,6 +55,7 @@ std::pair<f32, f32> polygon_offset_for_cull_mode(GXCullMode cullMode) noexcept {
+   return {g_gxState.frontOffset, g_gxState.frontScale};
+ }
+ 
++#if !defined(AURORA_RSX) // WebGPU pipeline state; the PS3 RSX backend maps GX state itself
+ wgpu::BlendFactor to_blend_factor(GXBlendFactor fac, bool isDst) {
+   switch (fac) {
+     DEFAULT_FATAL("invalid blend factor {}", underlying(fac));
+@@ -246,6 +247,7 @@ wgpu::PrimitiveState to_primitive_state(GXCullMode gx_cullMode) {
+       .cullMode = cullMode,
+   };
+ }
++#endif // !AURORA_RSX
+ } // namespace
+ 
+ void set_viewport_policy(AuroraViewportPolicy policy) noexcept {
+@@ -464,6 +466,7 @@ void set_render_scissor(const gfx::ClipRect& scissor) noexcept {
+ 
+ const gfx::TextureBind& get_texture(GXTexMapID id) noexcept { return g_gxState.textures[static_cast<size_t>(id)]; }
+ 
++#if !defined(AURORA_RSX) // WebGPU pipeline creation
+ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
+                                     const PipelineOptions& options, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
+                                     wgpu::ShaderModule shader, const char* label) noexcept {
+@@ -516,6 +519,7 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
+   };
+   return g_device.CreateRenderPipeline(&descriptor);
+ }
++#endif // !AURORA_RSX
+ 
+ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept {
+   ZoneScoped;
+@@ -673,6 +677,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
+   };
+ }
+ 
++#if !defined(AURORA_RSX) // WebGPU bind groups (rsx_api.cpp)
+ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
+   ZoneScoped;
+ 
+@@ -708,7 +713,10 @@ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
+   };
+ }
+ 
++#endif // !AURORA_RSX
++
+ void initialize() noexcept {
++#if !defined(AURORA_RSX)
+   {
+     std::array<wgpu::BindGroupLayoutEntry, MaxTextures * 2> textureEntries;
+     for (u32 i = 0; i < MaxTextures; ++i) {
+@@ -782,6 +790,7 @@ void initialize() noexcept {
+     };
+     sPipelineLayout = g_device.CreatePipelineLayout(&desc);
+   }
++#endif
+ }
+ 
+ void shutdown() noexcept {
+diff --git a/lib/internal.hpp b/lib/internal.hpp
+index 524b0f9..9d69fa6 100644
+--- a/lib/internal.hpp
++++ b/lib/internal.hpp
+@@ -40,6 +40,15 @@ using namespace std::string_view_literals;
+ #endif
+ #endif
+ 
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++// Every bswap in aurora converts between GX's big-endian data and host order,
++// so on a big-endian host (PS3) it is the identity.
++template <typename T>
++  requires((sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8) && std::is_arithmetic_v<T>)
++ALWAYS_INLINE constexpr T bswap(T val) noexcept {
++  return val;
++}
++#else
+ template <typename T>
+   requires(sizeof(T) == sizeof(uint16_t) && std::is_arithmetic_v<T>)
+ ALWAYS_INLINE constexpr T bswap(T val) noexcept {
+@@ -85,6 +94,7 @@ ALWAYS_INLINE constexpr T bswap(T val) noexcept {
+ #endif
+   return std::bit_cast<T>(bits);
+ }
++#endif
+ 
+ template <typename T>
+   requires(std::is_trivially_copyable_v<T>)

@@ -9,7 +9,7 @@ fail() { printf 'build-setup-pkg.command: error: %s\n' "$*" >&2; exit 1; }
 copy_clean() { DITTONORSRC=1 ditto --norsrc --noqtn "$@"; }
 usage() {
     cat <<'EOF'
-Usage: build-setup-pkg.command --nodtool-arm64 PATH --nodtool-x86_64 PATH --translator-arm64 PATH --translator-x86_64 PATH --cmake-root DIR --ninja-arm64 PATH --ninja-x86_64 PATH --output PKG [options]
+Usage: build-setup-pkg.command --nodtool-arm64 PATH --nodtool-x86_64 PATH --translator-arm64 PATH --translator-x86_64 PATH --setup-arm64 PATH --setup-x86_64 PATH --cmake-root DIR --ninja-arm64 PATH --ninja-x86_64 PATH --output PKG [options]
 
 Creates a game-code-free WiiCompiled Setup.pkg. The supplied tools must be
 maintainer-verified, redistributable macOS artifacts for both arm64 and
@@ -20,13 +20,15 @@ resulting pkg is unsigned unless
 Developer ID Installer certificate.
 
   --workspace DIR             Repository root (default: script's grandparent)
-  --version VERSION           Bundle/package version (default: 0.1.0)
+  --version VERSION           Bundle/package version (default: project version, or 0.1.0)
   --installer-identity NAME   Developer ID Installer identity for productbuild
+  --run-output FILE           Also write the same bundle as a self-extracting .run for frontends
 EOF
 }
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-workspace=$(cd "$script_dir/../.." && pwd); nodtool_arm64=""; nodtool_x86_64=""; translator_arm64=""; translator_x86_64=""; cmake_root=""; ninja_arm64=""; ninja_x86_64=""; output=""; version=0.1.0; identity=""
+workspace=$(cd "$script_dir/../.." && pwd); nodtool_arm64=""; nodtool_x86_64=""; translator_arm64=""; translator_x86_64=""; setup_arm64=""; setup_x86_64=""; cmake_root=""; ninja_arm64=""; ninja_x86_64=""; output=""; version=0.1.0; identity=""; run_output=""
+version_supplied=false
 while (($#)); do
     case "$1" in
         --workspace) workspace=${2:-}; shift 2 ;;
@@ -34,18 +36,21 @@ while (($#)); do
         --nodtool-x86_64) nodtool_x86_64=${2:-}; shift 2 ;;
         --translator-arm64) translator_arm64=${2:-}; shift 2 ;;
         --translator-x86_64) translator_x86_64=${2:-}; shift 2 ;;
+        --setup-arm64) setup_arm64=${2:-}; shift 2 ;;
+        --setup-x86_64) setup_x86_64=${2:-}; shift 2 ;;
         --cmake-root) cmake_root=${2:-}; shift 2 ;;
         --ninja-arm64) ninja_arm64=${2:-}; shift 2 ;;
         --ninja-x86_64) ninja_x86_64=${2:-}; shift 2 ;;
         --output) output=${2:-}; shift 2 ;;
-        --version) version=${2:-}; shift 2 ;;
+        --version) version=${2:-}; version_supplied=true; shift 2 ;;
         --installer-identity) identity=${2:-}; shift 2 ;;
+        --run-output) run_output=${2:-}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
 done
 version=${version#v}
-if [[ -z "$version" || "$version" == "0.1.0" ]]; then
+if [[ "$version_supplied" == false ]]; then
     local_csproj="$workspace/Launcher/Directory.Build.props"
     if [[ -f "$local_csproj" ]]; then
         detected=$(grep -m1 '<Version>' "$local_csproj" | sed -E 's/.*<Version>([^<]+)<\/Version>.*/\1/' || true)
@@ -58,7 +63,7 @@ fi
 IFS=. read -r version_major version_minor version_patch <<< "$version"
 short_version="$version_major.${version_minor:-0}.${version_patch:-0}"
 for tool in pkgbuild productbuild ditto codesign lipo; do command -v "$tool" >/dev/null || fail "required macOS tool unavailable: $tool"; done
-for tool_path in "$nodtool_arm64" "$nodtool_x86_64" "$translator_arm64" "$translator_x86_64" "$ninja_arm64" "$ninja_x86_64"; do [[ -x "$tool_path" ]] || fail 'each architecture-specific tool must name an executable'; done
+for tool_path in "$nodtool_arm64" "$nodtool_x86_64" "$translator_arm64" "$translator_x86_64" "$setup_arm64" "$setup_x86_64" "$ninja_arm64" "$ninja_x86_64"; do [[ -x "$tool_path" ]] || fail 'each architecture-specific tool must name an executable'; done
 [[ -x "$cmake_root/bin/cmake" ]] || fail '--cmake-root must contain bin/cmake'
 require_arch() {
     local artifact=$1 arch=$2 label=$3
@@ -66,6 +71,7 @@ require_arch() {
 }
 require_arch "$nodtool_arm64" arm64 '--nodtool-arm64'; require_arch "$nodtool_x86_64" x86_64 '--nodtool-x86_64'
 require_arch "$translator_arm64" arm64 '--translator-arm64'; require_arch "$translator_x86_64" x86_64 '--translator-x86_64'
+require_arch "$setup_arm64" arm64 '--setup-arm64'; require_arch "$setup_x86_64" x86_64 '--setup-x86_64'
 require_arch "$ninja_arm64" arm64 '--ninja-arm64'; require_arch "$ninja_x86_64" x86_64 '--ninja-x86_64'
 lipo "$cmake_root/bin/cmake" -verify_arch arm64 x86_64 >/dev/null 2>&1 || fail '--cmake-root/bin/cmake must be universal2'
 
@@ -90,12 +96,13 @@ run_for_arch() {
 }
 for arch in arm64 x86_64; do
     if [[ "$arch" == arm64 ]]; then
-        nodtool=$nodtool_arm64; translator=$translator_arm64; ninja=$ninja_arm64
+        nodtool=$nodtool_arm64; translator=$translator_arm64; setup=$setup_arm64; ninja=$ninja_arm64
     else
-        nodtool=$nodtool_x86_64; translator=$translator_x86_64; ninja=$ninja_x86_64
+        nodtool=$nodtool_x86_64; translator=$translator_x86_64; setup=$setup_x86_64; ninja=$ninja_x86_64
     fi
     run_for_arch "$arch" "--nodtool-$arch" "$nodtool" --version
     run_for_arch "$arch" "--translator-$arch" "$translator" --help
+    run_for_arch "$arch" "--setup-$arch" "$setup" --version
     run_for_arch "$arch" "--ninja-$arch" "$ninja" --version
 done
 run_for_arch "$host_arch" '--cmake-root/bin/cmake' "$cmake_root/bin/cmake" --version
@@ -142,15 +149,28 @@ APPLESCRIPT
 EOF
 chmod +x "$app/Contents/MacOS/WiiCompiledSetup"
 copy_clean "$script_dir/setup.command" "$resources/setup.command"; chmod +x "$resources/setup.command"
+copy_clean "$script_dir/sync-workspace.command" "$resources/sync-workspace.command"; chmod +x "$resources/sync-workspace.command"
 # Copy only the build inputs. This deliberately avoids a maintainer's ignored
 # output directories, local disc extraction, and developer-only packaging.
 mkdir -p "$resources/workspace"
 for source in aurora-main projects runtime translator; do
     [[ -d "$workspace/$source" ]] || fail "required workspace directory is missing: $source"
+    [[ "$source" != aurora-main || -f "$workspace/$source/CMakeLists.txt" ]] ||
+        fail "aurora-main is empty; run git submodule update --init --recursive"
     copy_clean "$workspace/$source" "$resources/workspace/$source"
 done
+# Setup bundles contain materialized sources and must work without Git.
+find "$resources/workspace" -name .git -prune -exec rm -rf {} +
+# The translation identity (build-cache.sh) covers the runtime's native registrations through this
+# index, so it is extracted from exactly the packaged runtime sources.
+if [[ "$host_arch" == arm64 ]]; then host_translator=$translator_arm64; else host_translator=$translator_x86_64; fi
+"$host_translator" emit-native-index --native-source-dir "$resources/workspace/runtime/src" \
+    --out "$resources/workspace/runtime/native-index.json" || fail 'the runtime native index could not be extracted'
+[[ -f "$resources/workspace/runtime/native-index.json" ]] || fail 'the runtime native index was not written'
 mkdir -p "$resources/workspace/Launcher/macos"
+copy_clean "$workspace/Launcher/Directory.Build.props" "$resources/workspace/Launcher/Directory.Build.props"
 copy_clean "$workspace/Launcher/local-build-macos.command" "$resources/workspace/Launcher/local-build-macos.command"
+copy_clean "$workspace/Launcher/build-cache.sh" "$resources/workspace/Launcher/build-cache.sh"
 copy_clean "$workspace/Launcher/macos/extract-disc.command" "$resources/workspace/Launcher/macos/extract-disc.command"
 copy_clean "$workspace/Launcher/macos/publish-app.command" "$resources/workspace/Launcher/macos/publish-app.command"
 chmod +x "$resources/workspace/Launcher/local-build-macos.command" "$resources/workspace/Launcher/macos/"*.command
@@ -168,6 +188,24 @@ copy_clean "$ninja_x86_64" "$resources/tools/x86_64/ninja"; chmod +x "$resources
 copy_clean "$workspace/LICENSE" "$resources/LICENSE"
 copy_clean "$workspace/THIRD-PARTY-NOTICES.md" "$resources/THIRD-PARTY-NOTICES.md"
 codesign --force --deep --sign - "$app"
+if [[ -n "$run_output" ]]; then
+    # The same signed Resources plus the setup CLI and its wiicompiled-setup entry point, behind
+    # setup-run-header.sh, so Wheel Wizard can download and run it without installing the pkg. Only
+    # the .run carries the CLI; the pkg's own setup.command never uses it.
+    run_output=$(cd "$(dirname "$run_output")" && pwd)/$(basename "$run_output")
+    run_extra="$stage/run-extra"
+    mkdir -p "$run_extra/tools/arm64" "$run_extra/tools/x86_64"
+    copy_clean "$script_dir/wiicompiled-setup.command" "$run_extra/wiicompiled-setup"
+    copy_clean "$setup_arm64" "$run_extra/tools/arm64/wiicompiled-setup"
+    copy_clean "$setup_x86_64" "$run_extra/tools/x86_64/wiicompiled-setup"
+    chmod +x "$run_extra/wiicompiled-setup" "$run_extra/tools/"*/wiicompiled-setup
+    codesign --force --sign - "$run_extra/tools/"*/wiicompiled-setup
+    sed "s/@VERSION@/$version/" "$script_dir/setup-run-header.sh" > "$stage/setup.run"
+    COPYFILE_DISABLE=1 /usr/bin/tar -czf - -C "$resources" . -C "$run_extra" . >> "$stage/setup.run"
+    chmod +x "$stage/setup.run"
+    ditto "$stage/setup.run" "$run_output"
+    printf 'Created self-extracting setup: %s\n' "$run_output"
+fi
 pkg="$stage/WiiCompiled-Setup-unsigned.pkg"
 DITTONORSRC=1 COPYFILE_DISABLE=1 pkgbuild --root "$stage/root" --identifier org.wiicompiled.setup --version "$version" --install-location / "$pkg"
 if [[ -n "$identity" ]]; then productbuild --sign "$identity" --package "$pkg" "$output"; else ditto "$pkg" "$output"; fi

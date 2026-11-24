@@ -284,13 +284,14 @@ inline constexpr const char* Describe(HostReadFailure failure) noexcept {
     return "unknown host read error";
 }
 
-// Read into private storage first and publish it only after the complete host
-// range has been obtained. Callers can therefore leave a guest DMA destination
-// untouched for every failure, including a host file truncated after indexing.
+// Validate the complete host range first, then hand the bytes to sink(done, data, size)
+// in chunks, so large reads need no file-sized staging buffer. Only an I/O error in the
+// middle of the read can leave the destination partly written.
+template <typename Sink>
 inline bool ReadExact(const std::filesystem::path& hostPath,
                       uint64_t offset,
                       uint32_t length,
-                      std::vector<uint8_t>& destination,
+                      Sink&& sink,
                       HostReadFailure& failure) {
     failure = HostReadFailure::None;
 
@@ -315,23 +316,24 @@ inline bool ReadExact(const std::filesystem::path& hostPath,
         return false;
     }
 
-    std::vector<uint8_t> staged(length);
     file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
     if (!file) {
         failure = HostReadFailure::BadOffset;
         return false;
     }
 
-    if (length != 0) {
-        file.read(reinterpret_cast<char*>(staged.data()),
-                  static_cast<std::streamsize>(length));
-        if (file.gcount() != static_cast<std::streamsize>(length)) {
+    constexpr uint32_t kChunkSize = 256u * 1024u;
+    std::vector<uint8_t> chunk(std::min(length, kChunkSize));
+    for (uint32_t done = 0; done < length;) {
+        const uint32_t size = std::min(length - done, kChunkSize);
+        file.read(reinterpret_cast<char*>(chunk.data()), static_cast<std::streamsize>(size));
+        if (file.gcount() != static_cast<std::streamsize>(size)) {
             failure = HostReadFailure::ShortRead;
             return false;
         }
+        sink(done, chunk.data(), size);
+        done += size;
     }
-
-    destination = std::move(staged);
     return true;
 }
 

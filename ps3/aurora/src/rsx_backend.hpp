@@ -6,13 +6,17 @@
 // (rsx_draw.cpp) and TEV is compiled into NV40 fragment programs (rsx_fragment.cpp).
 #pragma once
 
-#include "gfx/common.hpp"
+#include "gfx/types.hpp"
 #include "gfx/texture.hpp"
 #include "gx/gx.hpp"
 
 #include <rsx/rsx.h>
 
 #include <cstdint>
+
+namespace aurora::gfx {
+extern AuroraStats g_stats;
+} // namespace aurora::gfx
 
 namespace aurora::rsx {
 extern gcmContextData* g_ctx;
@@ -54,6 +58,7 @@ void begin_frame() noexcept;
 void end_frame() noexcept;
 uint32_t frame_index() noexcept;
 void set_present_texture(gfx::TextureHandle texture) noexcept;
+void set_present_black(bool black) noexcept;
 void wait_idle() noexcept;
 // Writes one raw NV40 method.
 void emit_method(uint32_t method, uint32_t value) noexcept;

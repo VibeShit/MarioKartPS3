@@ -52,6 +52,7 @@ const char* SDL_GetPlatform(void);
 const char* SDL_GetError(void);
 bool SDL_SetError(const char* fmt, ...);
 bool SDL_ClearError(void);
+#define SDL_InvalidParamError(param) SDL_SetError("Parameter '%s' is invalid", (param))
 
 /* ---- init ------------------------------------------------------------ */
 typedef Uint32 SDL_InitFlags;
@@ -73,6 +74,7 @@ void SDL_Quit(void);
 #define SDL_HINT_JOYSTICK_HIDAPI_WII_PLAYER_LED "SDL_JOYSTICK_HIDAPI_WII_PLAYER_LED"
 #define SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"
 #define SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE "SDL_JOYSTICK_HIDAPI_GAMECUBE"
+#define SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES "SDL_GAMECONTROLLER_IGNORE_DEVICES"
 bool SDL_SetHint(const char* name, const char* value);
 const char* SDL_GetHint(const char* name);
 
@@ -246,6 +248,9 @@ SDL_Gamepad* SDL_GetGamepadFromPlayerIndex(int player_index);
 SDL_JoystickID SDL_GetGamepadID(SDL_Gamepad* gamepad);
 SDL_Joystick* SDL_GetGamepadJoystick(SDL_Gamepad* gamepad);
 const char* SDL_GetGamepadName(SDL_Gamepad* gamepad);
+const char* SDL_GetGamepadNameForID(SDL_JoystickID instance_id);
+const char* SDL_GetGamepadPath(SDL_Gamepad* gamepad);
+int SDL_GetGamepadPlayerIndexForID(SDL_JoystickID instance_id);
 SDL_GamepadType SDL_GetGamepadType(SDL_Gamepad* gamepad);
 Uint16 SDL_GetGamepadVendor(SDL_Gamepad* gamepad);
 Uint16 SDL_GetGamepadProduct(SDL_Gamepad* gamepad);
@@ -348,6 +353,16 @@ typedef enum SDL_Scancode {
   SDL_SCANCODE_DOWN = 81,
   SDL_SCANCODE_UP = 82,
   SDL_SCANCODE_KP_ENTER = 88,
+  SDL_SCANCODE_KP_1 = 90,
+  SDL_SCANCODE_KP_2 = 91,
+  SDL_SCANCODE_KP_3 = 92,
+  SDL_SCANCODE_KP_4 = 93,
+  SDL_SCANCODE_KP_5 = 94,
+  SDL_SCANCODE_KP_6 = 95,
+  SDL_SCANCODE_KP_7 = 96,
+  SDL_SCANCODE_KP_8 = 97,
+  SDL_SCANCODE_KP_9 = 98,
+  SDL_SCANCODE_KP_0 = 98,
   SDL_SCANCODE_LCTRL = 224,
   SDL_SCANCODE_LSHIFT = 225,
   SDL_SCANCODE_LALT = 226,
@@ -359,12 +374,36 @@ typedef enum SDL_Scancode {
   SDL_SCANCODE_COUNT = 512
 } SDL_Scancode;
 typedef Uint32 SDL_Keycode;
+#define SDLK_UNKNOWN 0x00000000u
+#define SDLK_V 0x00000076u
 typedef Uint16 SDL_Keymod;
 typedef Uint32 SDL_WindowID;
 typedef Uint32 SDL_KeyboardID;
 typedef Uint32 SDL_MouseID;
 typedef Uint32 SDL_MouseButtonFlags;
 typedef struct SDL_Window SDL_Window;
+#define SDL_KMOD_NONE 0x0000u
+#define SDL_KMOD_CTRL 0x00c0u
+#define SDL_KMOD_ALT 0x0300u
+#define SDL_KMOD_GUI 0x0c00u
+char* SDL_GetClipboardText(void);
+#define SDL_BUTTON_MASK(X) (1u << ((X) - 1))
+typedef enum SDL_MouseWheelDirection { SDL_MOUSEWHEEL_NORMAL, SDL_MOUSEWHEEL_FLIPPED } SDL_MouseWheelDirection;
+typedef struct SDL_FPoint {
+  float x;
+  float y;
+} SDL_FPoint;
+typedef struct SDL_Rect {
+  int x, y;
+  int w, h;
+} SDL_Rect;
+typedef struct SDL_FRect {
+  float x, y;
+  float w, h;
+} SDL_FRect;
+SDL_Keymod SDL_GetModState(void);
+bool SDL_SetWindowRelativeMouseMode(SDL_Window* window, bool enabled);
+bool SDL_IsMainThread(void);
 const bool* SDL_GetKeyboardState(int* numkeys);
 SDL_Window* SDL_GetKeyboardFocus(void);
 const char* SDL_GetScancodeName(SDL_Scancode scancode);
@@ -378,6 +417,8 @@ typedef enum SDL_EventType {
   SDL_EVENT_QUIT = 0x100,
   SDL_EVENT_KEY_DOWN = 0x300,
   SDL_EVENT_KEY_UP,
+  SDL_EVENT_TEXT_EDITING,
+  SDL_EVENT_TEXT_INPUT,
   SDL_EVENT_MOUSE_MOTION = 0x400,
   SDL_EVENT_MOUSE_BUTTON_DOWN,
   SDL_EVENT_MOUSE_BUTTON_UP,
@@ -395,6 +436,10 @@ typedef enum SDL_EventType {
   SDL_EVENT_GAMEPAD_ADDED,
   SDL_EVENT_GAMEPAD_REMOVED,
   SDL_EVENT_GAMEPAD_REMAPPED,
+  SDL_EVENT_FINGER_DOWN = 0x700,
+  SDL_EVENT_FINGER_UP,
+  SDL_EVENT_FINGER_MOTION,
+  SDL_EVENT_FINGER_CANCELED,
   SDL_EVENT_LAST = 0xFFFF
 } SDL_EventType;
 
@@ -506,6 +551,34 @@ typedef struct SDL_GamepadAxisEvent {
   Sint16 value;
   Uint16 padding4;
 } SDL_GamepadAxisEvent;
+typedef Uint64 SDL_TouchID;
+typedef Uint64 SDL_FingerID;
+#define SDL_TOUCH_MOUSEID ((SDL_MouseID)-1)
+typedef struct SDL_TouchFingerEvent {
+  SDL_EventType type;
+  Uint32 reserved;
+  Uint64 timestamp;
+  SDL_TouchID touchID;
+  SDL_FingerID fingerID;
+  float x, y, dx, dy, pressure;
+  SDL_WindowID windowID;
+} SDL_TouchFingerEvent;
+typedef struct SDL_TextEditingEvent {
+  SDL_EventType type;
+  Uint32 reserved;
+  Uint64 timestamp;
+  SDL_WindowID windowID;
+  const char* text;
+  Sint32 start;
+  Sint32 length;
+} SDL_TextEditingEvent;
+typedef struct SDL_TextInputEvent {
+  SDL_EventType type;
+  Uint32 reserved;
+  Uint64 timestamp;
+  SDL_WindowID windowID;
+  const char* text;
+} SDL_TextInputEvent;
 typedef struct SDL_QuitEvent {
   SDL_EventType type;
   Uint32 reserved;
@@ -527,6 +600,9 @@ typedef union SDL_Event {
   SDL_GamepadAxisEvent gaxis;
   SDL_GamepadButtonEvent gbutton;
   SDL_QuitEvent quit;
+  SDL_TouchFingerEvent tfinger;
+  SDL_TextEditingEvent edit;
+  SDL_TextInputEvent text;
   Uint8 padding[128];
 } SDL_Event;
 
@@ -573,6 +649,15 @@ void SDL_DestroyAudioStream(SDL_AudioStream* stream);
 /* ---- iostream / filesystem ------------------------------------------ */
 typedef struct SDL_IOStream SDL_IOStream;
 typedef enum SDL_IOWhence { SDL_IO_SEEK_SET, SDL_IO_SEEK_CUR, SDL_IO_SEEK_END } SDL_IOWhence;
+typedef enum SDL_IOStatus {
+  SDL_IO_STATUS_READY,
+  SDL_IO_STATUS_ERROR,
+  SDL_IO_STATUS_EOF,
+  SDL_IO_STATUS_NOT_READY,
+  SDL_IO_STATUS_READONLY,
+  SDL_IO_STATUS_WRITEONLY
+} SDL_IOStatus;
+SDL_IOStatus SDL_GetIOStatus(SDL_IOStream* context);
 SDL_IOStream* SDL_IOFromFile(const char* file, const char* mode);
 bool SDL_CloseIO(SDL_IOStream* context);
 size_t SDL_ReadIO(SDL_IOStream* context, void* ptr, size_t size);
@@ -591,8 +676,45 @@ bool SDL_WriteU32LE(SDL_IOStream* dst, Uint32 value);
 bool SDL_WriteS32LE(SDL_IOStream* dst, Sint32 value);
 void* SDL_LoadFile(const char* file, size_t* datasize);
 bool SDL_CreateDirectory(const char* path);
+bool SDL_RemovePath(const char* path);
+bool SDL_RenamePath(const char* oldpath, const char* newpath);
+Uint32 SDL_rand_bits(void);
 const char* SDL_GetBasePath(void);
 char* SDL_GetPrefPath(const char* org, const char* app);
+
+/* ---- hidapi (no HID access on the PS3: init fails, nothing enumerates) */
+typedef struct SDL_hid_device SDL_hid_device;
+typedef enum SDL_hid_bus_type {
+  SDL_HID_API_BUS_UNKNOWN = 0x00,
+  SDL_HID_API_BUS_USB = 0x01,
+  SDL_HID_API_BUS_BLUETOOTH = 0x02
+} SDL_hid_bus_type;
+typedef struct SDL_hid_device_info {
+  char* path;
+  unsigned short vendor_id;
+  unsigned short product_id;
+  wchar_t* serial_number;
+  unsigned short release_number;
+  wchar_t* manufacturer_string;
+  wchar_t* product_string;
+  unsigned short usage_page;
+  unsigned short usage;
+  int interface_number;
+  int interface_class;
+  int interface_subclass;
+  int interface_protocol;
+  SDL_hid_bus_type bus_type;
+  struct SDL_hid_device_info* next;
+} SDL_hid_device_info;
+int SDL_hid_init(void);
+int SDL_hid_exit(void);
+Uint32 SDL_hid_device_change_count(void);
+SDL_hid_device_info* SDL_hid_enumerate(unsigned short vendor_id, unsigned short product_id);
+void SDL_hid_free_enumeration(SDL_hid_device_info* devs);
+SDL_hid_device* SDL_hid_open_path(const char* path);
+int SDL_hid_write(SDL_hid_device* dev, const unsigned char* data, size_t length);
+int SDL_hid_read_timeout(SDL_hid_device* dev, unsigned char* data, size_t length, int milliseconds);
+int SDL_hid_close(SDL_hid_device* dev);
 
 #ifdef __cplusplus
 }
