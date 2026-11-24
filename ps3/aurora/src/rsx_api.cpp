@@ -288,6 +288,9 @@ void aurora_end_frame_gx(AuroraImguiFrame*) {
 
 void aurora_end_frame() { aurora_end_frame_gx(nullptr); }
 
+// VI black (VISetBlack): frames still end, but show only black like the blanked VI output.
+extern "C" void aurora_ps3_set_present_black(bool black) { rsx::set_present_black(black); }
+
 void aurora_set_frame_worker_wait_callback(AuroraFrameWorkerWaitCallback) {}
 void aurora_wait_for_frame_worker() {}
 bool aurora_wait_for_frame_worker_for(uint32_t) { return true; }

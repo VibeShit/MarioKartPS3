@@ -171,6 +171,7 @@ void PollPads() {
         if (ioPadGetData(port, &data) != 0 || data.len == 0)
             continue;  // No new report: keep the previous state.
 
+        const PadState before = pad;
         auto& b = pad.buttons;
         b[SDL_GAMEPAD_BUTTON_SOUTH] = data.BTN_CROSS;
         b[SDL_GAMEPAD_BUTTON_EAST] = data.BTN_CIRCLE;
@@ -205,6 +206,30 @@ void PollPads() {
             pad.accel[0] = (static_cast<float>(data.SENSOR_X) - 512.0f) / kCountsPerG * SDL_STANDARD_GRAVITY;
             pad.accel[1] = -(static_cast<float>(data.SENSOR_Y) - 512.0f) / kCountsPerG * SDL_STANDARD_GRAVITY;
             pad.accel[2] = (static_cast<float>(data.SENSOR_Z) - 512.0f) / kCountsPerG * SDL_STANDARD_GRAVITY;
+        }
+
+        // aurora's pad layer is driven by these events, not by polling.
+        for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
+            if (b[i] == before.buttons[i])
+                continue;
+            SDL_Event event{};
+            event.type = b[i] ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+            event.gbutton.timestamp = SDL_GetTicksNS();
+            event.gbutton.which = PortToId(port);
+            event.gbutton.button = static_cast<Uint8>(i);
+            event.gbutton.down = b[i];
+            PushEventLocked(event);
+        }
+        for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; ++i) {
+            if (a[i] == before.axes[i])
+                continue;
+            SDL_Event event{};
+            event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+            event.gaxis.timestamp = SDL_GetTicksNS();
+            event.gaxis.which = PortToId(port);
+            event.gaxis.axis = static_cast<Uint8>(i);
+            event.gaxis.value = a[i];
+            PushEventLocked(event);
         }
     }
 }

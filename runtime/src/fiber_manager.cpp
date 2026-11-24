@@ -295,10 +295,10 @@ bool GuestFiberManager::CreateGuestFiber(uint32_t guestThreadAddr, uint32_t entr
     // translated/HLE call chains (notably NW4R's sound worker), and on macOS
     // it can exhaust the guarded coroutine stack as unrelated host work (such
     // as a window resize) adds a little more nesting. Keep enough headroom for
-    // those chains while the guest stack remains separately bounded. PS3 main RAM is
-    // too tight for 1 MiB per guest thread.
+    // those chains while the guest stack remains separately bounded. On PS3, where
+    // main RAM is tight, measured peaks stayed under 16 KiB through the menus.
 #if defined(__PPU__)
-    constexpr size_t kHostStackSize = 512 * 1024;
+    constexpr size_t kHostStackSize = 256 * 1024;
 #else
     constexpr size_t kHostStackSize = 1024 * 1024;
 #endif

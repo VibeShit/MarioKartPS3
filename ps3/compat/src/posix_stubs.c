@@ -2,6 +2,7 @@
  * does not provide. lv2 file systems have no symlinks or permission bits. */
 #include <errno.h>
 #include <fcntl.h>
+#include <malloc.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -84,3 +85,7 @@ int __wrap_rename(const char* from, const char* to) {
         return -1;
     return __real_rename(from, to);
 }
+
+/* Never shrink the heap: newlib's trimming made PSL1GHT's sbrk unmap and remap 1 MiB lv2
+ * chunks hundreds of times during play. */
+__attribute__((constructor)) static void disable_heap_trim(void) { mallopt(M_TRIM_THRESHOLD, -1); }

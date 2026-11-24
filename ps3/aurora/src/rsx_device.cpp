@@ -57,6 +57,7 @@ bool g_firstFlip = true;
 Target g_efb;
 Target g_current;
 gfx::TextureHandle g_presentTexture;
+bool g_presentBlack = false;
 bool g_textureCacheDirty = true;
 
 std::mutex g_freeMutex;
@@ -329,6 +330,7 @@ uint32_t display_width() noexcept { return g_displayWidth; }
 uint32_t display_height() noexcept { return g_displayHeight; }
 
 void set_present_texture(gfx::TextureHandle texture) noexcept { g_presentTexture = std::move(texture); }
+void set_present_black(bool black) noexcept { g_presentBlack = black; }
 
 void begin_frame() noexcept {
   // This frame reuses the streaming half of frame - 2.
@@ -367,7 +369,8 @@ void end_frame() noexcept {
     quad.texWidth = g_efb.width;
     quad.texHeight = g_efb.height;
   }
-  {
+  // While the VI is blanked only the cleared display is shown.
+  if (!g_presentBlack) {
     float w = static_cast<float>(g_displayWidth);
     float h = static_cast<float>(g_displayHeight);
     const float aspect = present_aspect();

@@ -517,6 +517,10 @@ void PaceToRetraceBoundary(Clock::time_point deadline) {
 // Single owner of the Aurora frame presentation sequence: seals the active frame, optionally paces the
 // producer to the VI retrace boundary, and pre-warms the next frame. Paced from GXCopyDisp; unpaced for
 // the retrace-context black/boot present path in AdvanceRetrace.
+#if defined(__PPU__)
+extern "C" void aurora_ps3_set_present_black(bool black);
+#endif
+
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
@@ -579,6 +583,13 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         aurora_set_present_schedule(0, 0);
     }
 
+#if defined(__PPU__)
+    {
+        // Frames rendered while the VI is blanked must not reach the screen.
+        std::lock_guard<std::mutex> lock(g_viMutex);
+        aurora_ps3_set_present_black(g_vi.black);
+    }
+#endif
     EndAuroraFrame();
     if (paceThisFrame) {
         PaceToRetraceBoundary(paceDeadline);
@@ -837,6 +848,9 @@ extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
         EnsureInitializedLocked();
         // Write to PENDING state - will be committed on next retrace after VIFlush
         g_vi.pendingBlack = makeBlack;
+        // EGG flushes from its GX draw-done callback, which the HLE never fires, so a pending
+        // unblank would wait for an unrelated VIFlush (seconds at boot). Apply it right away.
+        g_vi.black = makeBlack;
     }
     ViSetR3(ctx, 0);
 }

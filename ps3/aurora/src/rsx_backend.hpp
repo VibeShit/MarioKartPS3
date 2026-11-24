@@ -58,6 +58,7 @@ void begin_frame() noexcept;
 void end_frame() noexcept;
 uint32_t frame_index() noexcept;
 void set_present_texture(gfx::TextureHandle texture) noexcept;
+void set_present_black(bool black) noexcept;
 void wait_idle() noexcept;
 // Writes one raw NV40 method.
 void emit_method(uint32_t method, uint32_t value) noexcept;

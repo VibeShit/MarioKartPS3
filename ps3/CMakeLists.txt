@@ -253,7 +253,7 @@ target_compile_options(mkw_runtime PRIVATE -O2)
 include("${MKW_GENERATED_ROOT}/generated/build_shards/shards.cmake")
 
 set(MKW_TRANSLATED_EXTRA_SOURCES)
-foreach(candidate data_sections_init.cpp guest_symbol_table.cpp data_sections_init_blobs.S)
+foreach(candidate guest_symbol_table.cpp)
     if(EXISTS "${MKW_GENERATED_ROOT}/generated/${candidate}")
         list(APPEND MKW_TRANSLATED_EXTRA_SOURCES "${MKW_GENERATED_ROOT}/generated/${candidate}")
     endif()
@@ -261,8 +261,22 @@ endforeach()
 if(NOT EXISTS "${MKW_GENERATED_ROOT}/generated/guest_symbol_table.cpp")
     list(APPEND MKW_TRANSLATED_EXTRA_SOURCES "${MKW_RUNTIME_DIR}/cmake/guest_symbol_table_stub.cpp")
 endif()
-set_source_files_properties("${MKW_GENERATED_ROOT}/generated/data_sections_init_blobs.S"
-    PROPERTIES LANGUAGE ASM)
+# The guest DOL/REL images are only copied into guest RAM once at boot, so ship them as files
+# (read by ps3/runtime/data_sections_ps3.cpp) instead of keeping ~7.7 MiB resident in the EBOOT.
+set(MKW_DATA_SECTIONS_DIR "${CMAKE_BINARY_DIR}/pkg/USRDIR/data_sections")
+file(STRINGS "${MKW_GENERATED_ROOT}/generated/data_sections_init_blobs.S" _mkw_blob_lines
+     REGEX "^// (DOL|REL): |^\\.incbin ")
+set(_mkw_manifest "")
+foreach(_line IN LISTS _mkw_blob_lines)
+    if(_line MATCHES "^// (DOL|REL): [^ ]+ @ (0x[0-9A-Fa-f]+) \\(([0-9]+) bytes\\)")
+        set(_mkw_blob_info "${CMAKE_MATCH_2} ${CMAKE_MATCH_3}")
+    elseif(_line MATCHES "^\\.incbin \"(.*)\"")
+        get_filename_component(_mkw_blob_name "${CMAKE_MATCH_1}" NAME)
+        file(COPY "${CMAKE_MATCH_1}" DESTINATION "${MKW_DATA_SECTIONS_DIR}")
+        string(APPEND _mkw_manifest "${_mkw_blob_info} ${_mkw_blob_name}\n")
+    endif()
+endforeach()
+file(WRITE "${MKW_DATA_SECTIONS_DIR}/manifest.txt" "${_mkw_manifest}")
 # Runtime glue that depends on generated/ headers and the translated guest region.
 file(GLOB MKW_GAME_GLUE_SOURCES CONFIGURE_DEPENDS "${MKW_RUNTIME_DIR}/game/*.cpp")
 list(APPEND MKW_TRANSLATED_EXTRA_SOURCES ${MKW_GAME_GLUE_SOURCES})
